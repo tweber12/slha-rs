@@ -4,3 +4,4 @@ version = "0.1.0"
 authors = ["Torsten Weber <tweber@physik.rwth-aachen.de>"]
 
 [dependencies]
+nom = "*"
