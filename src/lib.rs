@@ -8,6 +8,12 @@ use std::str;
 use std::str::FromStr;
 
 #[derive(Debug)]
+pub struct NamedBlock<'input> {
+    name: String,
+    block: AnyBlock<'input>,
+}
+
+#[derive(Debug)]
 pub enum AnyBlock<'input> {
     II(Block<'input, i64, i64>),
     IF(Block<'input, i64, f64>),
@@ -22,7 +28,7 @@ pub enum AnyBlock<'input> {
 pub type Block<'input, Key, Value> = HashMap<Key, Payload<'input, Value>>;
 
 pub struct SLHA<'a> {
-    blocks: Vec<AnyBlock<'a>>,
+    blocks: Vec<NamedBlock<'a>>,
 }
 
 named!(parse_slha<SLHA>,
@@ -32,47 +38,47 @@ named!(parse_slha<SLHA>,
     )
 );
 
-named!(parse_anyblock<AnyBlock>, alt!(block_modsel | block_sminputs | block_minpar | block_extpar | block_mass | block_nmix
+named!(parse_anyblock<NamedBlock>, alt!(block_modsel | block_sminputs | block_minpar | block_extpar | block_mass | block_nmix
     | block_umix | block_vmix | block_stopmix | block_sbotmix | block_staumix | block_alpha | block_hmix | block_gauge
     | block_msoft | block_au | block_ad | block_ae | block_yu | block_yd | block_ye | block_spinfo));
 
-named!(block_modsel<AnyBlock>, apply!(block_ii, "modsel"));
-named!(block_sminputs<AnyBlock>, apply!(block_if, "sminputs"));
-named!(block_minpar<AnyBlock>, apply!(block_if, "minpar"));
-named!(block_extpar<AnyBlock>, apply!(block_if, "extpar"));
-named!(block_mass<AnyBlock>, apply!(block_if, "mass"));
-named!(block_nmix<AnyBlock>, apply!(block_iif, "nmix"));
-named!(block_umix<AnyBlock>, apply!(block_iif, "umix"));
-named!(block_vmix<AnyBlock>, apply!(block_iif, "vmix"));
-named!(block_stopmix<AnyBlock>, apply!(block_iif, "stopmix"));
-named!(block_sbotmix<AnyBlock>, apply!(block_iif, "sbotmix"));
-named!(block_staumix<AnyBlock>, apply!(block_iif, "staumix"));
-named!(block_alpha<AnyBlock>,
+named!(block_modsel<NamedBlock>, apply!(block_ii, "modsel"));
+named!(block_sminputs<NamedBlock>, apply!(block_if, "sminputs"));
+named!(block_minpar<NamedBlock>, apply!(block_if, "minpar"));
+named!(block_extpar<NamedBlock>, apply!(block_if, "extpar"));
+named!(block_mass<NamedBlock>, apply!(block_if, "mass"));
+named!(block_nmix<NamedBlock>, apply!(block_iif, "nmix"));
+named!(block_umix<NamedBlock>, apply!(block_iif, "umix"));
+named!(block_vmix<NamedBlock>, apply!(block_iif, "vmix"));
+named!(block_stopmix<NamedBlock>, apply!(block_iif, "stopmix"));
+named!(block_sbotmix<NamedBlock>, apply!(block_iif, "sbotmix"));
+named!(block_staumix<NamedBlock>, apply!(block_iif, "staumix"));
+named!(block_alpha<NamedBlock>,
     do_parse!(
         ws!(tag_no_case!("block")) >>
         tag_no_case!("alpha") >>
         eol_or_eof >>
         line: ws!(parse_line_f) >>
-        (AnyBlock::Alpha(line))
+        (NamedBlock { name: "alpha".to_string(), block: AnyBlock::Alpha(line) })
         )
 );
-named!(block_hmix<AnyBlock>, apply!(block_q_if, "hmix"));
-named!(block_gauge<AnyBlock>, apply!(block_q_if, "gauge"));
-named!(block_msoft<AnyBlock>, apply!(block_q_if, "msoft"));
-named!(block_au<AnyBlock>, apply!(block_q_iif, "au"));
-named!(block_ad<AnyBlock>, apply!(block_q_iif, "ad"));
-named!(block_ae<AnyBlock>, apply!(block_q_iif, "ae"));
-named!(block_yu<AnyBlock>, apply!(block_q_iif, "yu"));
-named!(block_yd<AnyBlock>, apply!(block_q_iif, "yd"));
-named!(block_ye<AnyBlock>, apply!(block_q_iif, "ye"));
-named!(block_spinfo<AnyBlock>, apply!(block_is, "spinfo"));
+named!(block_hmix<NamedBlock>, apply!(block_q_if, "hmix"));
+named!(block_gauge<NamedBlock>, apply!(block_q_if, "gauge"));
+named!(block_msoft<NamedBlock>, apply!(block_q_if, "msoft"));
+named!(block_au<NamedBlock>, apply!(block_q_iif, "au"));
+named!(block_ad<NamedBlock>, apply!(block_q_iif, "ad"));
+named!(block_ae<NamedBlock>, apply!(block_q_iif, "ae"));
+named!(block_yu<NamedBlock>, apply!(block_q_iif, "yu"));
+named!(block_yd<NamedBlock>, apply!(block_q_iif, "yd"));
+named!(block_ye<NamedBlock>, apply!(block_q_iif, "ye"));
+named!(block_spinfo<NamedBlock>, apply!(block_is, "spinfo"));
 
 fn parse_block<'input, K: ::std::hash::Hash + Eq, T>(
     input: &'input [u8],
     name: &str,
     parse_line: fn(&'input [u8]) -> nom::IResult<&'input [u8], (K, Payload<'input, T>)>,
     fun: fn(Block<'input, K, T>) -> AnyBlock,
-) -> nom::IResult<&'input [u8], AnyBlock<'input>> {
+) -> nom::IResult<&'input [u8], NamedBlock<'input>> {
     do_parse!(input,
         ws!(tag_no_case!("block")) >>
         tag_no_case!(name) >>
@@ -81,7 +87,7 @@ fn parse_block<'input, K: ::std::hash::Hash + Eq, T>(
         eol_or_eof >>
         skip_lines >>
         lines: many0!(preceded!(skip_lines, ws!(parse_line))) >>
-        (fun(lines.into_iter().collect()))
+        (NamedBlock { name: name.to_string(), block: fun(lines.into_iter().collect()) })
     )
 }
 
@@ -90,7 +96,7 @@ fn parse_block_q<'input, K: ::std::hash::Hash + Eq, T>(
     name: &str,
     parse_line: fn(&'input [u8]) -> nom::IResult<&'input [u8], (K, Payload<'input, T>)>,
     fun: fn(f64, Block<'input, K, T>) -> AnyBlock,
-) -> nom::IResult<&'input [u8], AnyBlock<'input>> {
+) -> nom::IResult<&'input [u8], NamedBlock<'input>> {
     do_parse!(input,
         ws!(tag_no_case!("block")) >>
         ws!(tag_no_case!(name)) >>
@@ -102,49 +108,49 @@ fn parse_block_q<'input, K: ::std::hash::Hash + Eq, T>(
         eol_or_eof >>
         skip_lines >>
         lines: many0!(preceded!(skip_lines, ws!(parse_line))) >>
-        (fun(scale, lines.into_iter().collect()))
+        (NamedBlock { name: name.to_string(), block: fun(scale, lines.into_iter().collect()) })
     )
 }
 
 fn block_ii<'input>(
     input: &'input [u8],
     name: &str,
-) -> nom::IResult<&'input [u8], AnyBlock<'input>> {
+) -> nom::IResult<&'input [u8], NamedBlock<'input>> {
     parse_block(input, name, parse_line_ii, AnyBlock::II)
 }
 
 fn block_if<'input>(
     input: &'input [u8],
     name: &str,
-) -> nom::IResult<&'input [u8], AnyBlock<'input>> {
+) -> nom::IResult<&'input [u8], NamedBlock<'input>> {
     parse_block(input, name, parse_line_if, AnyBlock::IF)
 }
 
 fn block_q_if<'input>(
     input: &'input [u8],
     name: &str,
-) -> nom::IResult<&'input [u8], AnyBlock<'input>> {
+) -> nom::IResult<&'input [u8], NamedBlock<'input>> {
     parse_block_q(input, name, parse_line_if, AnyBlock::IFQ)
 }
 
 fn block_iif<'input>(
     input: &'input [u8],
     name: &str,
-) -> nom::IResult<&'input [u8], AnyBlock<'input>> {
+) -> nom::IResult<&'input [u8], NamedBlock<'input>> {
     parse_block(input, name, parse_line_iif, AnyBlock::IIF)
 }
 
 fn block_q_iif<'input>(
     input: &'input [u8],
     name: &str,
-) -> nom::IResult<&'input [u8], AnyBlock<'input>> {
+) -> nom::IResult<&'input [u8], NamedBlock<'input>> {
     parse_block_q(input, name, parse_line_iif, AnyBlock::IIFQ)
 }
 
 fn block_is<'input>(
     input: &'input [u8],
     name: &str,
-) -> nom::IResult<&'input [u8], AnyBlock<'input>> {
+) -> nom::IResult<&'input [u8], NamedBlock<'input>> {
     parse_block(input, name, parse_line_is, AnyBlock::IS)
 }
 
@@ -281,8 +287,8 @@ mod tests {
                 IResult::Done(rest, _) if rest != &b""[..] => panic!("The parser did not consume the full input. {:?} was left over.)", rest),
                 IResult::Done(_, result) => result,
             };
-            if let AnyBlock::$variant(res) = result {
-                res
+            if let AnyBlock::$variant(res) = result.block {
+                (result.name, res)
             } else {
                 panic!("Wrong AnyResult variant {:?}", result);
             }
@@ -297,8 +303,8 @@ mod tests {
                 IResult::Done(rest, _) if rest != &b""[..] => panic!("The parser did not consume the full input. {:?} was left over.)", rest),
                 IResult::Done(_, result) => result,
             };
-            if let AnyBlock::$variant(q,res) = result {
-                (q,res)
+            if let AnyBlock::$variant(q,res) = result.block {
+                (result.name, q, res)
             } else {
                 panic!("Wrong AnyResult variant {:?}", result);
             }
@@ -416,44 +422,56 @@ mod tests {
 
     #[test]
     fn test_block_if() {
-        let result = unwrap_anyblock!(block_if(b"BLOCK TEST", "test"), IF);
+        let (name, result) = unwrap_anyblock!(block_if(b"BLOCK TEST", "test"), IF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_if(b"BLOCK TEST\n\n\n", "test"), IF);
+        let (name, result) = unwrap_anyblock!(block_if(b"BLOCK TEST\n\n\n", "test"), IF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_if(b"BLOCK TEST     ", "test"), IF);
+        let (name, result) = unwrap_anyblock!(block_if(b"BLOCK TEST     ", "test"), IF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_if(b"BLOCK TEST     \n", "test"), IF);
+        let (name, result) = unwrap_anyblock!(block_if(b"BLOCK TEST     \n", "test"), IF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo\n", "test"), IF);
+        let (name, result) = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo\n", "test"), IF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo", "test"), IF);
+        let (name, result) = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo", "test"), IF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo    \n", "test"), IF);
+        let (name, result) = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo    \n", "test"), IF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo      ", "test"), IF);
+        let (name, result) = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo      ", "test"), IF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo      \n  12 5.4", "test"), IF);
+        let (name, result) = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo      \n  12 5.4", "test"), IF);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 1);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
 
-        let result = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5.4", "test"), IF);
+        let (name, result) = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5.4", "test"), IF);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 1);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
 
-        let result = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5.4\n # Post comment\n 13 8.93", "test"), IF);
+        let (name, result) = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5.4\n # Post comment\n 13 8.93", "test"), IF);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
         assert_eq!(result[&13], Payload { value: 8.93, comment: None });
 
-        let result = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment", "test"), IF);
+        let (name, result) = unwrap_anyblock!(block_if(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment", "test"), IF);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
         assert_eq!(result[&13], Payload { value: 8.93, comment: Some(&b" Trailing comment"[..]) });
@@ -461,44 +479,56 @@ mod tests {
 
     #[test]
     fn test_block_ii() {
-        let result = unwrap_anyblock!(block_ii(b"BLOCK TEST", "test"), II);
+        let (name, result) = unwrap_anyblock!(block_ii(b"BLOCK TEST", "test"), II);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_ii(b"BLOCK TEST\n\n\n", "test"), II);
+        let (name, result) = unwrap_anyblock!(block_ii(b"BLOCK TEST\n\n\n", "test"), II);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_ii(b"BLOCK TEST     ", "test"), II);
+        let (name, result) = unwrap_anyblock!(block_ii(b"BLOCK TEST     ", "test"), II);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_ii(b"BLOCK TEST     \n", "test"), II);
+        let (name, result) = unwrap_anyblock!(block_ii(b"BLOCK TEST     \n", "test"), II);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo\n", "test"), II);
+        let (name, result) = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo\n", "test"), II);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo", "test"), II);
+        let (name, result) = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo", "test"), II);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo    \n", "test"), II);
+        let (name, result) = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo    \n", "test"), II);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo      ", "test"), II);
+        let (name, result) = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo      ", "test"), II);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo      \n  12 5", "test"), II);
+        let (name, result) = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo      \n  12 5", "test"), II);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 1);
         assert_eq!(result[&12], Payload { value: 5, comment: None });
 
-        let result = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5", "test"), II);
+        let (name, result) = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5", "test"), II);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 1);
         assert_eq!(result[&12], Payload { value: 5, comment: None });
 
-        let result = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5\n # Post comment\n 13 8", "test"), II);
+        let (name, result) = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5\n # Post comment\n 13 8", "test"), II);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5, comment: None });
         assert_eq!(result[&13], Payload { value: 8, comment: None });
 
-        let result = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5\n # Post comment\n    \n#Another comment\n 18 8   # Trailing comment", "test"), II);
+        let (name, result) = unwrap_anyblock!(block_ii(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5\n # Post comment\n    \n#Another comment\n 18 8   # Trailing comment", "test"), II);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5, comment: None });
         assert_eq!(result[&18], Payload { value: 8, comment: Some(&b" Trailing comment"[..]) });
@@ -506,44 +536,56 @@ mod tests {
 
     #[test]
     fn test_block_iif() {
-        let result = unwrap_anyblock!(block_iif(b"BLOCK TEST", "test"), IIF);
+        let (name, result) = unwrap_anyblock!(block_iif(b"BLOCK TEST", "test"), IIF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_iif(b"BLOCK TEST\n\n\n", "test"), IIF);
+        let (name, result) = unwrap_anyblock!(block_iif(b"BLOCK TEST\n\n\n", "test"), IIF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_iif(b"BLOCK TEST     ", "test"), IIF);
+        let (name, result) = unwrap_anyblock!(block_iif(b"BLOCK TEST     ", "test"), IIF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_iif(b"BLOCK TEST     \n", "test"), IIF);
+        let (name, result) = unwrap_anyblock!(block_iif(b"BLOCK TEST     \n", "test"), IIF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo\n", "test"), IIF);
+        let (name, result) = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo\n", "test"), IIF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo", "test"), IIF);
+        let (name, result) = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo", "test"), IIF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo    \n", "test"), IIF);
+        let (name, result) = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo    \n", "test"), IIF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo      ", "test"), IIF);
+        let (name, result) = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo      ", "test"), IIF);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo      \n  12 5  9.35", "test"), IIF);
+        let (name, result) = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo      \n  12 5  9.35", "test"), IIF);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 1);
         assert_eq!(result[&(12,5)], Payload { value: 9.35, comment: None });
 
-        let result = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo      \n # Pre comment \n 13 6 -5.2", "test"), IIF);
+        let (name, result) = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo      \n # Pre comment \n 13 6 -5.2", "test"), IIF);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 1);
         assert_eq!(result[&(13,6)], Payload { value: -5.2, comment: None });
 
-        let result = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5  1.0e-9\n # Post comment\n 13 8 4.2e3", "test"), IIF);
+        let (name, result) = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo      \n # Pre comment \n 12 5  1.0e-9\n # Post comment\n 13 8 4.2e3", "test"), IIF);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(12,5)], Payload { value: 1.0e-9, comment: None });
         assert_eq!(result[&(13,8)], Payload { value: 4.2e3, comment: None });
 
-        let result = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment", "test"), IIF);
+        let (name, result) = unwrap_anyblock!(block_iif(b"BLOCK TEST     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment", "test"), IIF);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,8)], Payload { value: 4.2e4, comment: Some(&b" Trailing comment"[..]) });
@@ -551,44 +593,56 @@ mod tests {
 
     #[test]
     fn test_block_is() {
-        let result = unwrap_anyblock!(block_is(b"BLOCK TEST", "test"), IS);
+        let (name, result) = unwrap_anyblock!(block_is(b"BLOCK TEST", "test"), IS);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_is(b"BLOCK TEST\n\n\n", "test"), IS);
+        let (name, result) = unwrap_anyblock!(block_is(b"BLOCK TEST\n\n\n", "test"), IS);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_is(b"BLOCK TEST     ", "test"), IS);
+        let (name, result) = unwrap_anyblock!(block_is(b"BLOCK TEST     ", "test"), IS);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_is(b"BLOCK TEST     \n", "test"), IS);
+        let (name, result) = unwrap_anyblock!(block_is(b"BLOCK TEST     \n", "test"), IS);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo\n", "test"), IS);
+        let (name, result) = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo\n", "test"), IS);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo", "test"), IS);
+        let (name, result) = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo", "test"), IS);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo    \n", "test"), IS);
+        let (name, result) = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo    \n", "test"), IS);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo      ", "test"), IS);
+        let (name, result) = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo      ", "test"), IS);
+        assert_eq!(name, "test");
         assert!(result.is_empty());
 
-        let result = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo      \n  12 Value", "test"), IS);
+        let (name, result) = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo      \n  12 Value", "test"), IS);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 1);
         assert_eq!(result[&12], Payload { value: &b"Value"[..], comment: None });
 
-        let result = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo      \n # Pre comment \n 12 This is the value", "test"), IS);
+        let (name, result) = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo      \n # Pre comment \n 12 This is the value", "test"), IS);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 1);
         assert_eq!(result[&12], Payload { value: &b"This is the value"[..], comment: None });
 
-        let result = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo      \n # Pre comment \n 12 version number?\n # Post comment\n 13 error code", "test"), IS);
+        let (name, result) = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo      \n # Pre comment \n 12 version number?\n # Post comment\n 13 error code", "test"), IS);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: &b"version number?"[..], comment: None });
         assert_eq!(result[&13], Payload { value: &b"error code"[..], comment: None });
 
-        let result = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo      \n # Pre comment \n 12 version\n # Post comment\n    \n#Another comment\n 18 here stands an error code   # Trailing comment", "test"), IS);
+        let (name, result) = unwrap_anyblock!(block_is(b"BLOCK TEST     # foo      \n # Pre comment \n 12 version\n # Post comment\n    \n#Another comment\n 18 here stands an error code   # Trailing comment", "test"), IS);
+        assert_eq!(name, "test");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: &b"version"[..], comment: None });
         assert_eq!(result[&18], Payload { value: &b"here stands an error code   "[..], comment: Some(&b" Trailing comment"[..]) });
@@ -596,55 +650,67 @@ mod tests {
 
     #[test]
     fn test_block_q_if() {
-        let (q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST Q= 5.4", "test"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST Q= 5.4", "test"), IFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 5.4);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST Q= -9.4\n\n\n", "test"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST Q= -9.4\n\n\n", "test"), IFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, -9.4);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST   Q= -321.913   ", "test"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST   Q= -321.913   ", "test"), IFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, -321.913);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST  Q= 91.20   \n", "test"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST  Q= 91.20   \n", "test"), IFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 91.20);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST Q= -321.913      # foo\n", "test"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST Q= -321.913      # foo\n", "test"), IFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, -321.913);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST    Q= -321.913   # foo", "test"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST    Q= -321.913   # foo", "test"), IFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, -321.913);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST  Q= -321.913     # foo    \n", "test"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST  Q= -321.913     # foo    \n", "test"), IFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, -321.913);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST      Q= -321.913 # foo      ", "test"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST      Q= -321.913 # foo      ", "test"), IFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, -321.913);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST  Q= -321.913     # foo      \n  12 5.4", "test"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST  Q= -321.913     # foo      \n  12 5.4", "test"), IFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, -321.913);
         assert_eq!(result.len(), 1);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
 
-        let (q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST  Q= -321.913     # foo      \n # Pre comment \n 12 5.4", "test"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST  Q= -321.913     # foo      \n # Pre comment \n 12 5.4", "test"), IFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, -321.913);
         assert_eq!(result.len(), 1);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
 
-        let (q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST     Q= -321.913  # foo      \n # Pre comment \n 12 5.4\n # Post comment\n 13 8.93", "test"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST     Q= -321.913  # foo      \n # Pre comment \n 12 5.4\n # Post comment\n 13 8.93", "test"), IFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, -321.913);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
         assert_eq!(result[&13], Payload { value: 8.93, comment: None });
 
-        let (q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST    Q= -321.913   # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment", "test"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_if(b"BLOCK TEST    Q= -321.913   # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment", "test"), IFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, -321.913);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
@@ -653,55 +719,67 @@ mod tests {
 
     #[test]
     fn test_block_q_iif() {
-        let (q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST    Q=  723.42", "test"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST    Q=  723.42", "test"), IIFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 723.42);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42\n\n\n", "test"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42\n\n\n", "test"), IIFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 723.42);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     ", "test"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     ", "test"), IIFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 723.42);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     \n", "test"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     \n", "test"), IIFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 723.42);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo\n", "test"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo\n", "test"), IIFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 723.42);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo", "test"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo", "test"), IIFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 723.42);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo    \n", "test"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo    \n", "test"), IIFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 723.42);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo      ", "test"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo      ", "test"), IIFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 723.42);
         assert!(result.is_empty());
 
-        let (q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo      \n  12 5  9.35", "test"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo      \n  12 5  9.35", "test"), IIFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 723.42);
         assert_eq!(result.len(), 1);
         assert_eq!(result[&(12,5)], Payload { value: 9.35, comment: None });
 
-        let (q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo      \n # Pre comment \n 13 6 -5.2", "test"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo      \n # Pre comment \n 13 6 -5.2", "test"), IIFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 723.42);
         assert_eq!(result.len(), 1);
         assert_eq!(result[&(13,6)], Payload { value: -5.2, comment: None });
 
-        let (q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo      \n # Pre comment \n 12 5  1.0e-9\n # Post comment\n 13 8 4.2e3", "test"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo      \n # Pre comment \n 12 5  1.0e-9\n # Post comment\n 13 8 4.2e3", "test"), IIFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 723.42);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(12,5)], Payload { value: 1.0e-9, comment: None });
         assert_eq!(result[&(13,8)], Payload { value: 4.2e3, comment: None });
 
-        let (q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment", "test"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(block_q_iif(b"BLOCK TEST   Q= 723.42     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment", "test"), IIFQ);
+        assert_eq!(name, "test");
         assert_eq!(q, 723.42);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
@@ -710,116 +788,137 @@ mod tests {
 
     #[test]
     fn test_parse_anyblock() {
-        let result = unwrap_anyblock!(parse_anyblock(b"BLOCK MODSEL     # foo      \n # Pre comment \n 12 5\n # Post comment\n 13 8"), II);
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK MODSEL     # foo      \n # Pre comment \n 12 5\n # Post comment\n 13 8"), II);
+        assert_eq!(name, "modsel");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5, comment: None });
         assert_eq!(result[&13], Payload { value: 8, comment: None });
 
-        let result = unwrap_anyblock!(parse_anyblock(b"BLOCK sMinPUts     # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IF);
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK sMinPUts     # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IF);
+        assert_eq!(name, "sminputs");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
         assert_eq!(result[&13], Payload { value: 8.93, comment: Some(&b" Trailing comment"[..]) });
 
-        let result = unwrap_anyblock!(parse_anyblock(b"BLOCK mInpar     # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IF);
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK mInpar     # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IF);
+        assert_eq!(name, "minpar");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
         assert_eq!(result[&13], Payload { value: 8.93, comment: Some(&b" Trailing comment"[..]) });
 
-        let result = unwrap_anyblock!(parse_anyblock(b"BLOCK extPAR     # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IF);
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK extPAR     # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IF);
+        assert_eq!(name, "extpar");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
         assert_eq!(result[&13], Payload { value: 8.93, comment: Some(&b" Trailing comment"[..]) });
 
-        let result = unwrap_anyblock!(parse_anyblock(b"BLOCK MASS     # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IF);
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK MASS     # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IF);
+        assert_eq!(name, "mass");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
         assert_eq!(result[&13], Payload { value: 8.93, comment: Some(&b" Trailing comment"[..]) });
 
-        let result = unwrap_anyblock!(parse_anyblock(b"BLOCK NMIX     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIF);
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK NMIX     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIF);
+        assert_eq!(name, "nmix");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,8)], Payload { value: 4.2e4, comment: Some(&b" Trailing comment"[..]) });
 
-        let result = unwrap_anyblock!(parse_anyblock(b"BLOCK uMIX     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIF);
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK uMIX     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIF);
+        assert_eq!(name, "umix");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,8)], Payload { value: 4.2e4, comment: Some(&b" Trailing comment"[..]) });
 
-        let result = unwrap_anyblock!(parse_anyblock(b"BLOCK vmix     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIF);
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK vmix     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIF);
+        assert_eq!(name, "vmix");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,8)], Payload { value: 4.2e4, comment: Some(&b" Trailing comment"[..]) });
 
-        let result = unwrap_anyblock!(parse_anyblock(b"BLOCK stopmix     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIF);
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK stopmix     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIF);
+        assert_eq!(name, "stopmix");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,8)], Payload { value: 4.2e4, comment: Some(&b" Trailing comment"[..]) });
 
-        let result = unwrap_anyblock!(parse_anyblock(b"BLOCK sbotmix     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIF);
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK sbotmix     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIF);
+        assert_eq!(name, "sbotmix");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,8)], Payload { value: 4.2e4, comment: Some(&b" Trailing comment"[..]) });
 
-        let result = unwrap_anyblock!(parse_anyblock(b"BLOCK staumix     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIF);
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK staumix     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIF);
+        assert_eq!(name, "staumix");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,8)], Payload { value: 4.2e4, comment: Some(&b" Trailing comment"[..]) });
 
-        let (q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK HMIX    Q= -321.913   # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK HMIX    Q= -321.913   # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IFQ);
+        assert_eq!(name, "hmix");
         assert_eq!(q, -321.913);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
         assert_eq!(result[&13], Payload { value: 8.93, comment: Some(&b" Trailing comment"[..]) });
 
-        let (q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK GAuge    Q= -321.913   # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK GAuge    Q= -321.913   # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IFQ);
+        assert_eq!(name, "gauge");
         assert_eq!(q, -321.913);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
         assert_eq!(result[&13], Payload { value: 8.93, comment: Some(&b" Trailing comment"[..]) });
 
-        let (q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK msoft    Q= -321.913   # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IFQ);
+        let (name, q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK msoft    Q= -321.913   # foo      \n # Pre comment \n 12 5.4\n # Post comment\n    \n#Another comment\n 13 8.93   # Trailing comment"), IFQ);
+        assert_eq!(name, "msoft");
         assert_eq!(q, -321.913);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: 5.4, comment: None });
         assert_eq!(result[&13], Payload { value: 8.93, comment: Some(&b" Trailing comment"[..]) });
 
-        let (q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK Au   Q= 723.42     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK Au   Q= 723.42     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIFQ);
+        assert_eq!(name, "au");
         assert_eq!(q, 723.42);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,8)], Payload { value: 4.2e4, comment: Some(&b" Trailing comment"[..]) });
 
-        let (q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK AD   Q= 723.42     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK AD   Q= 723.42     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIFQ);
+        assert_eq!(name, "ad");
         assert_eq!(q, 723.42);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,8)], Payload { value: 4.2e4, comment: Some(&b" Trailing comment"[..]) });
 
-        let (q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK aE   Q= 724.42     # foo      \n # Pre comment \n 12 6   -78.32\n # Post comment\n    \n#Another comment\n 18 9   4.3e4  # Trailing comment"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK aE   Q= 724.42     # foo      \n # Pre comment \n 12 6   -78.32\n # Post comment\n    \n#Another comment\n 18 9   4.3e4  # Trailing comment"), IIFQ);
+        assert_eq!(name, "ae");
         assert_eq!(q, 724.42);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(12,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,9)], Payload { value: 4.3e4, comment: Some(&b" Trailing comment"[..]) });
 
-        let (q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK yu   Q= 723.42     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK yu   Q= 723.42     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIFQ);
+        assert_eq!(name, "yu");
         assert_eq!(q, 723.42);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,8)], Payload { value: 4.2e4, comment: Some(&b" Trailing comment"[..]) });
 
-        let (q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK yD   Q= 723.42     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK yD   Q= 723.42     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIFQ);
+        assert_eq!(name, "yd");
         assert_eq!(q, 723.42);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,8)], Payload { value: 4.2e4, comment: Some(&b" Trailing comment"[..]) });
 
-        let (q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK YE   Q= 723.42     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIFQ);
+        let (name, q, result) = unwrap_anyblock_q!(parse_anyblock(b"BLOCK YE   Q= 723.42     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), IIFQ);
+        assert_eq!(name, "ye");
         assert_eq!(q, 723.42);
         assert_eq!(result.len(), 2);
         assert_eq!(result[&(13,6)], Payload { value: -78.32, comment: None });
         assert_eq!(result[&(18,8)], Payload { value: 4.2e4, comment: Some(&b" Trailing comment"[..]) });
 
-        let result = unwrap_anyblock!(parse_anyblock(b"BLOCK spinfo     # foo      \n # Pre comment \n 12 version\n # Post comment\n    \n#Another comment\n 18 here stands an error code   # Trailing comment"), IS);
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK spinfo     # foo      \n # Pre comment \n 12 version\n # Post comment\n    \n#Another comment\n 18 here stands an error code   # Trailing comment"), IS);
+        assert_eq!(name, "spinfo");
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: &b"version"[..], comment: None });
         assert_eq!(result[&18], Payload { value: &b"here stands an error code   "[..], comment: Some(&b" Trailing comment"[..]) });
