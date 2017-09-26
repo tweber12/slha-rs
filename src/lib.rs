@@ -3,6 +3,7 @@ extern crate nom;
 use nom::{double, line_ending, not_line_ending};
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::i64;
 use std::str;
 use std::str::FromStr;
@@ -85,13 +86,12 @@ fn parse_block<'input, K: ::std::hash::Hash + Eq, T>(
         skip_whitespace >>
         parse_opt_comment >>
         eol_or_eof >>
-        skip_lines >>
-        lines: many0!(preceded!(skip_lines, ws!(parse_line))) >>
-        (NamedBlock { name: name.to_string(), block: fun(lines.into_iter().collect()) })
+        lines: apply!(parse_block_body, parse_line) >>
+        (NamedBlock { name: name.to_string(), block: fun(lines) })
     )
 }
 
-fn parse_block_q<'input, K: ::std::hash::Hash + Eq, T>(
+fn parse_block_q<'input, K: Hash + Eq, T>(
     input: &'input [u8],
     name: &str,
     parse_line: fn(&'input [u8]) -> nom::IResult<&'input [u8], (K, Payload<'input, T>)>,
@@ -106,9 +106,19 @@ fn parse_block_q<'input, K: ::std::hash::Hash + Eq, T>(
         skip_whitespace >>
         parse_opt_comment >>
         eol_or_eof >>
+        lines: apply!(parse_block_body, parse_line) >>
+        (NamedBlock { name: name.to_string(), block: fun(scale, lines) })
+    )
+}
+
+fn parse_block_body<'input, K: Hash + Eq, T>(
+    input: &'input [u8],
+    parse_line: fn(&'input [u8]) -> nom::IResult<&'input [u8], (K, Payload<'input, T>)>,
+) -> nom::IResult<&'input [u8], Block<'input, K, T>> {
+    do_parse!(input,
         skip_lines >>
         lines: many0!(preceded!(skip_lines, ws!(parse_line))) >>
-        (NamedBlock { name: name.to_string(), block: fun(scale, lines.into_iter().collect()) })
+        (lines.into_iter().collect())
     )
 }
 
