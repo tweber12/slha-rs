@@ -24,6 +24,7 @@ pub enum AnyBlock<'input> {
     IIFQ(f64, Block<'input, (i64, i64), f64>),
     Alpha(Payload<'input, f64>),
     IS(Block<'input, i64, &'input [u8]>),
+    Unknown(Vec<Payload<'input, &'input [u8]>>),
 }
 
 pub type Block<'input, Key, Value> = HashMap<Key, Payload<'input, Value>>;
@@ -41,7 +42,7 @@ named!(parse_slha<SLHA>,
 
 named!(parse_anyblock<NamedBlock>, alt!(block_modsel | block_sminputs | block_minpar | block_extpar | block_mass | block_nmix
     | block_umix | block_vmix | block_stopmix | block_sbotmix | block_staumix | block_alpha | block_hmix | block_gauge
-    | block_msoft | block_au | block_ad | block_ae | block_yu | block_yd | block_ye | block_spinfo));
+    | block_msoft | block_au | block_ad | block_ae | block_yu | block_yd | block_ye | block_spinfo | unknown_block));
 
 named!(block_modsel<NamedBlock>, apply!(block_ii, "modsel"));
 named!(block_sminputs<NamedBlock>, apply!(block_if, "sminputs"));
@@ -73,6 +74,24 @@ named!(block_yu<NamedBlock>, apply!(block_q_iif, "yu"));
 named!(block_yd<NamedBlock>, apply!(block_q_iif, "yd"));
 named!(block_ye<NamedBlock>, apply!(block_q_iif, "ye"));
 named!(block_spinfo<NamedBlock>, apply!(block_is, "spinfo"));
+
+named!(unknown_block<NamedBlock>,
+    do_parse!(
+        ws!(tag_no_case!("block")) >>
+        name: parse_unknown_block_name >>
+        parse_opt_comment >>
+        eol_or_eof >>
+        skip_lines >>
+        lines: many0!(preceded!(skip_lines, parse_line_s)) >>
+        (NamedBlock { name, block: AnyBlock::Unknown(lines) })
+    )
+);
+named!(parse_unknown_block_name<String>,
+    map_res!(
+        take_till1_s!(end_of_string),
+        |n: &[u8]| str::from_utf8(n).map(|n| n.trim().to_lowercase())
+    )
+);
 
 fn parse_block<'input, K: ::std::hash::Hash + Eq, T>(
     input: &'input [u8],
@@ -229,6 +248,15 @@ named!(parse_line_is<(i64, Payload<&[u8]>)>,
     )
 );
 
+named!(parse_line_s<Payload<&[u8]>>,
+    do_parse!(
+        value: take_till1_s!(end_of_string) >>
+        comment: parse_opt_comment >>
+        eol_or_eof >>
+        (Payload { value, comment })
+    )
+);
+
 named!(parse_i64<i64>,
     do_parse!(
         sign: opt!(alt!(
@@ -275,8 +303,9 @@ mod tests {
     use nom;
     use nom::IResult;
     use super::{parse_slha, block_if, block_ii, block_iif, block_is, block_q_if, block_q_iif,
-                parse_anyblock, parse_comment, parse_opt_comment, parse_line_f, parse_line_if,
-                parse_line_ii, parse_line_iif, parse_line_is, AnyBlock, Payload};
+                unknown_block, parse_anyblock, parse_comment, parse_opt_comment, parse_line_f,
+                parse_line_if, parse_line_ii, parse_line_iif, parse_line_is, parse_line_s,
+                AnyBlock, Payload};
 
     macro_rules! test_iresult {
         ($result:expr, $expected:expr) => {
@@ -428,6 +457,26 @@ mod tests {
         test_iresult!(parse_line_is(b"  12 String# foo"), (12, Payload { value: &b"String"[..], comment: Some(b" foo".as_ref()) }));
         test_iresult!(parse_line_is(b"12   Not comment String  # comment"), (12, Payload { value: &b"Not comment String  "[..], comment: Some(b" comment".as_ref()) }));
         test_iresult!(parse_line_is(b"  12 String  # foo"), (12, Payload { value: &b"String  "[..], comment: Some(b" foo".as_ref()) }));
+    }
+
+    #[test]
+    fn test_parse_line_s() {
+        test_iresult!(parse_line_s(b" There is a string here\n"), Payload { value: &b" There is a string here"[..], comment: None });
+        test_iresult!(parse_line_s(b"       More strings\n"), Payload { value: &b"       More strings"[..], comment: None });
+        test_iresult!(parse_line_s(b" Version number    \n"), Payload { value: &b" Version number    "[..], comment: None });
+        test_iresult!(parse_line_s(b"     3.4.8    \n"), Payload { value: &b"     3.4.8    "[..], comment: None });
+        test_iresult!(parse_line_s(b"   String"), Payload { value: &b"   String"[..], comment: None });
+        test_iresult!(parse_line_s(b"   String"), Payload { value: &b"   String"[..], comment: None });
+        test_iresult!(parse_line_s(b" String  "), Payload { value: &b" String  "[..], comment: None });
+        test_iresult!(parse_line_s(b"     String  "), Payload { value: &b"     String  "  [..], comment: None });
+        test_iresult!(parse_line_s(b" String# foo\n"), Payload { value: &b" String"[..], comment: Some(b" foo".as_ref()) });
+        test_iresult!(parse_line_s(b"     String# foo\n"), Payload { value: &b"     String"[..], comment: Some(b" foo".as_ref()) });
+        test_iresult!(parse_line_s(b"   String    # foo\n"), Payload { value: &b"   String    "[..], comment: Some(b" foo".as_ref()) });
+        test_iresult!(parse_line_s(b"   String    # foo\n"), Payload { value: &b"   String    "[..], comment: Some(b" foo".as_ref()) });
+        test_iresult!(parse_line_s(b"tring# bar"), Payload { value: &b"tring"[..], comment: Some(b" bar".as_ref()) });
+        test_iresult!(parse_line_s(b"   String# foo"), Payload { value: &b"   String"[..], comment: Some(b" foo".as_ref()) });
+        test_iresult!(parse_line_s(b"  Not comment String  # comment"), Payload { value: &b"  Not comment String  "[..], comment: Some(b" comment".as_ref()) });
+        test_iresult!(parse_line_s(b"This   String  # foo"), Payload { value: &b"This   String  "[..], comment: Some(b" foo".as_ref()) });
     }
 
     #[test]
@@ -656,6 +705,63 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: &b"version"[..], comment: None });
         assert_eq!(result[&18], Payload { value: &b"here stands an error code   "[..], comment: Some(&b" Trailing comment"[..]) });
+    }
+
+    #[test]
+    fn test_block_s() {
+        let (name, result) = unwrap_anyblock!(unknown_block(b"BLOCK TEST"), Unknown);
+        assert_eq!(name, "test");
+        assert!(result.is_empty());
+
+        let (name, result) = unwrap_anyblock!(unknown_block(b"BLOCK foo\n\n\n"), Unknown);
+        assert_eq!(name, "foo");
+        assert!(result.is_empty());
+
+        let (name, result) = unwrap_anyblock!(unknown_block(b"BLOCK super     "), Unknown);
+        assert_eq!(name, "super");
+        assert!(result.is_empty());
+
+        let (name, result) = unwrap_anyblock!(unknown_block(b"BLOCK FOO Bar     \n"), Unknown);
+        assert_eq!(name, "foo bar");
+        assert!(result.is_empty());
+
+        let (name, result) = unwrap_anyblock!(unknown_block(b"BLOCK    TEST     # foo\n"), Unknown);
+        assert_eq!(name, "test");
+        assert!(result.is_empty());
+
+        let (name, result) = unwrap_anyblock!(unknown_block(b"BLOCK blib blub     # foo"), Unknown);
+        assert_eq!(name, "blib blub");
+        assert!(result.is_empty());
+
+        let (name, result) = unwrap_anyblock!(unknown_block(b"BLOCK TEST     # foo    \n"), Unknown);
+        assert_eq!(name, "test");
+        assert!(result.is_empty());
+
+        let (name, result) = unwrap_anyblock!(unknown_block(b"BLOCK Is this a TEST?     # foo      "), Unknown);
+        assert_eq!(name, "is this a test?");
+        assert!(result.is_empty());
+
+        let (name, result) = unwrap_anyblock!(unknown_block(b"BLOCK TEST     # foo      \n  12 Value"), Unknown);
+        assert_eq!(name, "test");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], Payload { value: &b"  12 Value"[..], comment: None });
+
+        let (name, result) = unwrap_anyblock!(unknown_block(b"BLOCK TEST     # foo      \n # Pre comment \n 12 This is the value"), Unknown);
+        assert_eq!(name, "test");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], Payload { value: &b" 12 This is the value"[..], comment: None });
+
+        let (name, result) = unwrap_anyblock!(unknown_block(b"BLOCK WHY?     # foo      \n # Pre comment \n   12 version number?\n # Post comment\n 13 error code"), Unknown);
+        assert_eq!(name, "why?");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], Payload { value: &b"   12 version number?"[..], comment: None });
+        assert_eq!(result[1], Payload { value: &b" 13 error code"[..], comment: None });
+
+        let (name, result) = unwrap_anyblock!(unknown_block(b"BLOCK TEST     # foo      \n # Pre comment \n 12 version\n # Post comment\n    \n#Another comment\nhere stands an error code   # Trailing comment"), Unknown);
+        assert_eq!(name, "test");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], Payload { value: &b" 12 version"[..], comment: None });
+        assert_eq!(result[1], Payload { value: &b"here stands an error code   "[..], comment: Some(&b" Trailing comment"[..]) });
     }
 
     #[test]
@@ -932,6 +1038,12 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result[&12], Payload { value: &b"version"[..], comment: None });
         assert_eq!(result[&18], Payload { value: &b"here stands an error code   "[..], comment: Some(&b" Trailing comment"[..]) });
+
+        let (name, result) = unwrap_anyblock!(parse_anyblock(b"BLOCK UNKNOWN     # foo      \n # Pre comment \n 13 6   -78.32\n # Post comment\n    \n#Another comment\n 18 8   4.2e4  # Trailing comment"), Unknown);
+        assert_eq!(name, "unknown");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0], Payload { value: b" 13 6   -78.32".as_ref(), comment: None });
+        assert_eq!(result[1], Payload { value: b" 18 8   4.2e4  ".as_ref(), comment: Some(&b" Trailing comment"[..]) });
     }
 
     #[test]
