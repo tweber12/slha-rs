@@ -3,7 +3,6 @@ use std::hash::Hash;
 use std::iter;
 use std::num::{ParseFloatError, ParseIntError};
 use std::str;
-use std::str::FromStr;
 
 /// A trait for blocks that can be read from an SLHA file.
 pub trait SlhaBlock<E>: Sized {
@@ -41,6 +40,9 @@ pub enum ParseError {
     UnexpectedIdent,
     MissingBlockName,
     MalformedBlockHeader(String),
+    DuplicateBlock(String),
+    RedefinedBlockWithQ(String),
+    InvalidScale(ParseFloatError),
 }
 pub trait Parseable: Sized {
     fn parse<'input>(&'input str) -> ParseResult<'input, Self>;
@@ -86,6 +88,8 @@ impl_parseable!(f64, InvalidFloat);
 
 macro_rules! impl_parseable_tuple {
     ($($name:ident),+) => {
+        #[allow(non_snake_case)]
+        #[allow(unused_assignments)]
         impl<$($name),*> Parseable for ($($name),*)
         where
             $($name: Parseable),*
@@ -129,7 +133,7 @@ fn next_word(input: &str) -> Option<(&str, &str)> {
 }
 
 pub struct Block<Key, Value> {
-    map: HashMap<Key, Value>,
+    pub map: HashMap<Key, Value>,
 }
 impl<Key, Value> SlhaBlock<ParseError> for Block<Key, Value>
 where
@@ -171,39 +175,96 @@ pub struct Line<'input> {
     comment: Option<&'input str>,
 }
 
+#[derive(Debug)]
+enum BlockScale<'a> {
+    WithScale(Vec<(f64, Vec<Line<'a>>)>),
+    WithoutScale(Vec<Line<'a>>),
+}
+
+enum Segment<'a> {
+    Block {
+        name: String,
+        block: Vec<Line<'a>>,
+        scale: Option<f64>,
+    },
+}
+
 /// An SLHA file.
 #[derive(Debug)]
 pub struct Slha<'a> {
-    blocks: HashMap<String, Vec<Line<'a>>>,
+    blocks: HashMap<String, BlockScale<'a>>,
 }
 impl<'a> Slha<'a> {
     /// Create a new Slha object from raw data.
-    fn parse(input: &'a str) -> Result<Slha<'a>, ParseError> {
-        let mut blocks = HashMap::new();
+    pub fn parse(input: &'a str) -> Result<Slha<'a>, ParseError> {
+        let mut slha = Slha { blocks: HashMap::new() };
         let mut lines = input.lines().peekable();
-        loop {
-            let (name, block) = match parse_segment(&mut lines) {
-                Some(s) => s?,
-                None => break,
-            };
-            blocks.insert(name, block);
+        while let Some(segment) = parse_segment(&mut lines) {
+            match segment? {
+                Segment::Block { name, block, scale } => slha.insert_block(name, block, scale)?,
+            }
         }
-        Ok(Slha { blocks })
+        Ok(slha)
     }
 
     /// Lookup a block.
-    fn get_block<B: SlhaBlock<E>, E>(&self, name: &str) -> Option<Result<B, E>> {
-        let lines = match self.blocks.get(name) {
+    pub fn get_block<B: SlhaBlock<E>, E>(&self, name: &str) -> Option<Result<B, E>> {
+        let block = match self.blocks.get(name) {
             Some(lines) => lines,
             None => return None,
         };
+        let lines = match block {
+            &BlockScale::WithoutScale(ref lines) => lines,
+            &BlockScale::WithScale(ref blocks) => &(blocks[0].1),
+        };
         Some(B::parse(lines))
+    }
+
+    fn insert_block(
+        &mut self,
+        name: String,
+        block: Vec<Line<'a>>,
+        scale: Option<f64>,
+    ) -> Result<(), ParseError> {
+        if let Some(scale) = scale {
+            self.insert_block_scale(name, block, scale)
+        } else {
+            self.insert_block_noscale(name, block)
+        }
+    }
+
+    fn insert_block_noscale(
+        &mut self,
+        name: String,
+        block: Vec<Line<'a>>,
+    ) -> Result<(), ParseError> {
+        if self.blocks.contains_key(&name) {
+            return Err(ParseError::DuplicateBlock(name));
+        }
+        self.blocks.insert(name, BlockScale::WithoutScale(block));
+        Ok(())
+    }
+
+    fn insert_block_scale(
+        &mut self,
+        name: String,
+        block: Vec<Line<'a>>,
+        scale: f64,
+    ) -> Result<(), ParseError> {
+        let entry = self.blocks.entry(name.clone()).or_insert_with(|| {
+            BlockScale::WithScale(Vec::new())
+        });
+        match *entry {
+            BlockScale::WithoutScale(_) => return Err(ParseError::RedefinedBlockWithQ(name)),
+            BlockScale::WithScale(ref mut blocks) => blocks.push((scale, block)),
+        };
+        Ok(())
     }
 }
 
 fn parse_segment<'a>(
     input: &mut iter::Peekable<str::Lines<'a>>,
-) -> Option<Result<(String, Vec<Line<'a>>), ParseError>> {
+) -> Option<Result<Segment<'a>, ParseError>> {
     skip_empty_lines(input);
     let line = match input.next() {
         Some(line) => line,
@@ -241,19 +302,12 @@ where
 fn parse_block<'a, Iter>(
     header: &str,
     input: &mut iter::Peekable<Iter>,
-) -> Result<(String, Vec<Line<'a>>), ParseError>
+) -> Result<Segment<'a>, ParseError>
 where
     Iter: Iterator<Item = &'a str>,
 {
-    let (data, _) = split_comment(header);
-    let name = match next_word(data) {
-        None => return Err(ParseError::MissingBlockName),
-        Some((name, rest)) if !rest.trim().is_empty() => {
-            return Err(ParseError::MalformedBlockHeader(rest.to_string()));
-        }
-        Some((name, _)) => name.to_lowercase(),
-    };
-    let mut lines = Vec::new();
+    let (name, scale) = parse_block_header(header)?;
+    let mut block = Vec::new();
     loop {
         {
             let line = match input.peek() {
@@ -264,11 +318,43 @@ where
                 break;
             }
             let (data, comment) = split_comment(line.trim());
-            lines.push(Line { data, comment });
+            block.push(Line { data, comment });
         }
         input.next();
     }
-    Ok((name, lines))
+    Ok(Segment::Block { name, block, scale })
+}
+
+fn parse_block_header(header: &str) -> Result<(String, Option<f64>), ParseError> {
+    let (data, _) = split_comment(header);
+    let (name, rest) = match next_word(data) {
+        None => return Err(ParseError::MissingBlockName),
+        Some((name, rest)) => (name.to_lowercase(), rest),
+    };
+    let scale = parse_block_scale(rest)?;
+    Ok((name, scale))
+}
+
+fn parse_block_scale(header: &str) -> Result<Option<f64>, ParseError> {
+    let (word, rest) = match next_word(header) {
+        None => return Ok(None),
+        Some(a) => a,
+    };
+    println!("word: '{}', rest: '{}'", word, rest);
+    let rest = match word.to_lowercase().as_ref() {
+        "q=" => rest,
+        "q" => {
+            match next_word(rest) {
+                Some(("=", rest)) => rest,
+                _ => return Err(ParseError::MalformedBlockHeader(header.to_string())),
+            }
+        }
+        _ => return Err(ParseError::MalformedBlockHeader(header.to_string())),
+    };
+    match str::parse(rest.trim()) {
+        Ok(scale) => Ok(Some(scale)),
+        Err(e) => Err(ParseError::InvalidScale(e)),
+    }
 }
 
 fn split_comment(line: &str) -> (&str, Option<&str>) {
@@ -511,5 +597,60 @@ Block staumix  # stau mixing matrix
         assert_eq!(staumix.map[&2], (2, 9.60465267e-01));
         assert_eq!(staumix.map[&3], (1, 9.60465267e-01));
         assert_eq!(staumix.map[&4], (2, -2.78399839e-01));
+    }
+
+    #[test]
+    fn test_example_3() {
+        // Pieces of the example file from appendix D.2 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "
+Block Umix  # chargino U mixing matrix
+  1  1     9.16207706e-01   # U_{1,1}
+  1  2    -4.00703680e-01   # U_{1,2}
+  2  1     4.00703680e-01   # U_{2,1}
+  2  2     9.16207706e-01   # U_{2,2}
+Block gauge Q= 4.64649125e+02
+     1     3.60872342e-01   # g’(Q)MSSM DRbar
+     2     6.46479280e-01   # g(Q)MSSM DRbar
+     3     1.09623002e+00   # g3(Q)MSSM DRbar
+Block yu Q= 4.64649125e+02
+  3  3     8.88194465e-01   # Yt(Q)MSSM DRbar
+Block yd Q= 4.64649125e+02
+  3  3     1.40135884e-01   # Yb(Q)MSSM DRbar
+Block ye Q= 4.64649125e+02
+  3  3     9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block hmix Q= 4.64649125e+02  # Higgs mixing parameters
+     1     3.58660361e+02   # mu(Q)MSSM DRbar
+     2     9.75139550e+00   # tan beta(Q)MSSM DRbar
+     3     2.44923506e+02   # higgs vev(Q)MSSM DRbar
+     4     1.69697051e+04   # [m3^2/cosBsinB](Q)MSSM DRbar
+";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let gauge: Block<i8, f64> = slha.get_block("gauge").unwrap().unwrap();
+        assert_eq!(gauge.map.len(), 3);
+        assert_eq!(gauge.map[&1], 3.60872342e-01);
+        assert_eq!(gauge.map[&2], 6.46479280e-01);
+        assert_eq!(gauge.map[&3], 1.09623002e+00);
+        let umix: Block<(u8, u8), f64> = slha.get_block("umix").unwrap().unwrap();
+        assert_eq!(umix.map.len(), 4);
+        assert_eq!(umix.map[&(1, 1)], 9.16207706e-01);
+        assert_eq!(umix.map[&(1, 2)], -4.00703680e-01);
+        assert_eq!(umix.map[&(2, 1)], 4.00703680e-01);
+        assert_eq!(umix.map[&(2, 2)], 9.16207706e-01);
+        let yu: Block<(u8, u8), f64> = slha.get_block("yu").unwrap().unwrap();
+        assert_eq!(yu.map.len(), 1);
+        assert_eq!(yu.map[&(3, 3)], 8.88194465e-01);
+        let yd: Block<(u8, u8), f64> = slha.get_block("yd").unwrap().unwrap();
+        assert_eq!(yd.map.len(), 1);
+        assert_eq!(yd.map[&(3, 3)], 1.40135884e-01);
+        let ye: Block<(u8, u8), f64> = slha.get_block("ye").unwrap().unwrap();
+        assert_eq!(ye.map.len(), 1);
+        assert_eq!(ye.map[&(3, 3)], 9.97405356e-02);
+        let hmix: Block<i8, f64> = slha.get_block("hmix").unwrap().unwrap();
+        assert_eq!(hmix.map.len(), 4);
+        assert_eq!(hmix.map[&1], 3.58660361e+02);
+        assert_eq!(hmix.map[&2], 9.75139550e+00);
+        assert_eq!(hmix.map[&3], 2.44923506e+02);
+        assert_eq!(hmix.map[&4], 1.69697051e+04);
     }
 }
