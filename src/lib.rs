@@ -8,10 +8,97 @@ use std::i64;
 use std::str;
 use std::str::FromStr;
 
+mod test;
+
 #[derive(Debug)]
 pub struct NamedBlock<'input> {
     name: String,
     block: AnyBlock<'input>,
+}
+
+pub struct SlhaParser {
+    expected: HashMap<String, BlockType>,
+}
+impl SlhaParser {
+    pub fn new() -> SlhaParser {
+        SlhaParser { expected: HashMap::new() }
+    }
+    pub fn slha1() -> SlhaParser {
+        let expected = vec![
+            ("modsel".to_string(), BlockType::II),
+            ("sminputs".to_string(), BlockType::IF),
+            ("minpar".to_string(), BlockType::IF),
+            ("extpar".to_string(), BlockType::IF),
+            ("mass".to_string(), BlockType::IF),
+            ("nmix".to_string(), BlockType::IIF),
+            ("umix".to_string(), BlockType::IIF),
+            ("vmix".to_string(), BlockType::IIF),
+            ("stopmix".to_string(), BlockType::IIF),
+            ("sbotmix".to_string(), BlockType::IIF),
+            ("staumix".to_string(), BlockType::IIF),
+            ("hmix".to_string(), BlockType::IFQ),
+            ("gauge".to_string(), BlockType::IFQ),
+            ("msoft".to_string(), BlockType::IFQ),
+            ("au".to_string(), BlockType::IIFQ),
+            ("ad".to_string(), BlockType::IIFQ),
+            ("ae".to_string(), BlockType::IIFQ),
+            ("ya".to_string(), BlockType::IIFQ),
+            ("yd".to_string(), BlockType::IIFQ),
+            ("ye".to_string(), BlockType::IIFQ),
+            ("spinfo".to_string(), BlockType::IS),
+        ].into_iter()
+            .collect();
+        SlhaParser { expected }
+    }
+    pub fn register_block(&mut self, name: String, block_type: BlockType) {
+        self.expected.insert(name, block_type);
+    }
+    pub fn parse<'input>(&self, input: &'input [u8]) -> Result<SLHA<'input>, nom::IError> {
+        let blocks = many0!(input, apply!(parse_any_block, &self.expected))
+            .to_full_result()?;
+        Ok(SLHA { blocks })
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum BlockType {
+    II,
+    IF,
+    IIF,
+    IFQ,
+    IIFQ,
+    F,
+    IS,
+}
+impl BlockType {
+    fn parse(
+        self,
+        input: &[u8],
+        name: String,
+        scale: Option<f64>,
+    ) -> nom::IResult<&[u8], NamedBlock> {
+        match self {
+            BlockType::II => {
+                parse_block_body_named(input, name, scale, parse_line_ii, AnyBlock::II)
+            }
+            BlockType::IF => {
+                parse_block_body_named(input, name, scale, parse_line_if, AnyBlock::IF)
+            }
+            BlockType::IS => {
+                parse_block_body_named(input, name, scale, parse_line_is, AnyBlock::IS)
+            }
+            BlockType::IIF => {
+                parse_block_body_named(input, name, scale, parse_line_iif, AnyBlock::IIF)
+            }
+            BlockType::IFQ => {
+                parse_block_q_body_named(input, name, scale, parse_line_if, AnyBlock::IFQ)
+            }
+            BlockType::IIFQ => {
+                parse_block_q_body_named(input, name, scale, parse_line_iif, AnyBlock::IIFQ)
+            }
+            _ => unimplemented!(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -86,6 +173,19 @@ named!(unknown_block<NamedBlock>,
         (NamedBlock { name, block: AnyBlock::Unknown(lines) })
     )
 );
+
+fn parse_unknown<'input>(
+    input: &'input [u8],
+    name: String,
+) -> nom::IResult<&'input [u8], NamedBlock<'input>> {
+    do_parse!(input,
+        skip_lines >>
+        lines: many0!(preceded!(skip_lines, parse_line_s)) >>
+        (NamedBlock { name, block: AnyBlock::Unknown(lines) })
+    )
+}
+
+
 named!(parse_unknown_block_name<String>,
     map_res!(
         take_till1_s!(end_of_string),
@@ -130,6 +230,70 @@ fn parse_block_q<'input, K: Hash + Eq, T>(
     )
 }
 
+fn parse_any_block<'input>(
+    input: &'input [u8],
+    registered: &HashMap<String, BlockType>,
+) -> nom::IResult<&'input [u8], NamedBlock<'input>> {
+    let (rest, (name, scale)) = match parse_block_header(input) {
+        nom::IResult::Done(rest, result) => (rest, result),
+        nom::IResult::Error(e) => return nom::IResult::Error(e),
+        nom::IResult::Incomplete(i) => return nom::IResult::Incomplete(i),
+    };
+    match registered.get(&name) {
+        Some(block_type) => block_type.parse(input, name, scale),
+        None => parse_unknown(input, name),
+    }
+}
+
+named!(parse_block_header<(String, Option<f64>)>,
+    do_parse!(
+        ws!(tag_no_case!("block")) >>
+        name: parse_block_name >>
+        skip_whitespace >>
+        //scale: parse_opt_scale >>
+        //skip_whitespace >>
+        parse_opt_comment >>
+        eol_or_eof >>
+        (name, None)
+    )
+);
+
+fn parse_block_body_named<'input, K: Hash + Eq, T>(
+    input: &'input [u8],
+    name: String,
+    scale: Option<f64>,
+    parse_line: fn(&'input [u8]) -> nom::IResult<&'input [u8], (K, Payload<'input, T>)>,
+    fun: fn(Block<'input, K, T>) -> AnyBlock,
+) -> nom::IResult<&'input [u8], NamedBlock<'input>> {
+    if let Some(_) = scale {
+        return nom::IResult::Error(nom::ErrorKind::Custom(1));
+    }
+    do_parse!(input,
+        skip_lines >>
+        lines: many0!(preceded!(skip_lines, ws!(parse_line))) >>
+        (NamedBlock { name: name.to_string(), block: fun(lines.into_iter().collect()) })
+    )
+}
+
+fn parse_block_q_body_named<'input, K: Hash + Eq, T>(
+    input: &'input [u8],
+    name: String,
+    scale: Option<f64>,
+    parse_line: fn(&'input [u8]) -> nom::IResult<&'input [u8], (K, Payload<'input, T>)>,
+    fun: fn(f64, Block<'input, K, T>) -> AnyBlock,
+) -> nom::IResult<&'input [u8], NamedBlock<'input>> {
+    let scale = if let Some(s) = scale {
+        s
+    } else {
+        return nom::IResult::Error(nom::ErrorKind::Custom(2));
+    };
+    do_parse!(input,
+        skip_lines >>
+        lines: many0!(preceded!(skip_lines, ws!(parse_line))) >>
+        (NamedBlock { name: name.to_string(), block: fun(scale, lines.into_iter().collect()) })
+    )
+}
+
 fn parse_block_body<'input, K: Hash + Eq, T>(
     input: &'input [u8],
     parse_line: fn(&'input [u8]) -> nom::IResult<&'input [u8], (K, Payload<'input, T>)>,
@@ -140,6 +304,22 @@ fn parse_block_body<'input, K: Hash + Eq, T>(
         (lines.into_iter().collect())
     )
 }
+
+named!(parse_block_name<String>,
+    map_res!(
+        take_till1!(nom::is_space),
+        |n: &[u8]| str::from_utf8(n).map(|n| n.trim().to_lowercase())
+    )
+);
+
+//named!(parse_opt_scale,
+//opt!(complete!(do_parse(
+//ws!(tag_no_case!("q")) >>
+//ws!(tag_no_case!("=")) >>
+//scale: double >>
+//(scale)
+//)))
+/*);*/
 
 fn block_ii<'input>(
     input: &'input [u8],
