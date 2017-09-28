@@ -37,7 +37,7 @@ pub enum ParseError {
     InvalidInt(ParseIntError),
     InvalidFloat(ParseFloatError),
     UnknownSegment(String),
-    UnexpectedIdent,
+    UnexpectedIdent(String),
     MissingBlockName,
     MalformedBlockHeader(String),
     DuplicateBlock(String),
@@ -271,7 +271,7 @@ fn parse_segment<'a>(
         None => return None,
     };
     if line.starts_with(|c: char| c.is_whitespace()) {
-        return Some(Err(ParseError::UnexpectedIdent));
+        return Some(Err(ParseError::UnexpectedIdent(line.to_string())));
     }
     match next_word(line) {
         Some((kw, rest)) => Some(match kw.to_lowercase().as_ref() {
@@ -310,6 +310,7 @@ where
     let mut block = Vec::new();
     loop {
         {
+            skip_empty_lines(input);
             let line = match input.peek() {
                 Some(line) => line,
                 None => break,
@@ -424,12 +425,17 @@ block Mass
 # This block contains information
 # about testing.
 BLOCK TEST # This is the block header
+# Lets put a comment here, because why not
  1 3 # Testcase number one
+# How about we separate the two lines here
+ # by two comment lines, one of which is indented
  4 6     # Testcase number two
 
 # The masses of all particles
 block Mass
-  6  173.2    # M_top";
+  6  173.2    # M_top
+# A trailing comment can't hurt, now can it?
+";
         let slha = Slha::parse(input).unwrap();
         println!("{:?}", slha);
         let block: Block<i64, i64> = slha.get_block("test").unwrap().unwrap();
