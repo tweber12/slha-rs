@@ -43,6 +43,13 @@ pub enum ParseError {
     DuplicateBlock(String),
     RedefinedBlockWithQ(String),
     InvalidScale(ParseFloatError),
+    DuplicateDecay(i64),
+    MissingDecayingParticle,
+    InvalidPdgId(ParseIntError),
+    InvalidWidth(ParseFloatError),
+    InvalidBranchingRatio(Box<ParseError>),
+    InvalidNumOfDaughters(Box<ParseError>),
+    InvalidDaughterId(Box<ParseError>),
 }
 pub trait Parseable: Sized {
     fn parse<'input>(&'input str) -> ParseResult<'input, Self>;
@@ -166,6 +173,18 @@ where
     ParseResult::Done(input, (key, value))
 }
 
+#[derive(Debug)]
+pub struct DecayTable {
+    width: f64,
+    decays: Vec<Decay>,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Decay {
+    branching_ratio: f64,
+    daughters: Vec<i64>,
+}
+
 /// A line read from an SLHA file.
 #[derive(Debug)]
 pub struct Line<'input> {
@@ -187,21 +206,35 @@ enum Segment<'a> {
         block: Vec<Line<'a>>,
         scale: Option<f64>,
     },
+    Decay {
+        pdg_id: i64,
+        width: f64,
+        decays: Vec<Decay>,
+    },
 }
 
 /// An SLHA file.
 #[derive(Debug)]
 pub struct Slha<'a> {
     blocks: HashMap<String, BlockScale<'a>>,
+    decays: HashMap<i64, DecayTable>,
 }
 impl<'a> Slha<'a> {
     /// Create a new Slha object from raw data.
     pub fn parse(input: &'a str) -> Result<Slha<'a>, ParseError> {
-        let mut slha = Slha { blocks: HashMap::new() };
+        let mut slha = Slha {
+            blocks: HashMap::new(),
+            decays: HashMap::new(),
+        };
         let mut lines = input.lines().peekable();
         while let Some(segment) = parse_segment(&mut lines) {
             match segment? {
                 Segment::Block { name, block, scale } => slha.insert_block(name, block, scale)?,
+                Segment::Decay {
+                    pdg_id,
+                    width,
+                    decays,
+                } => slha.insert_decay(pdg_id, width, decays)?,
             }
         }
         Ok(slha)
@@ -218,6 +251,10 @@ impl<'a> Slha<'a> {
             &BlockScale::WithScale(ref blocks) => &(blocks[0].1),
         };
         Some(B::parse(lines))
+    }
+
+    pub fn get_decay(&self, pdg_id: i64) -> Option<&DecayTable> {
+        self.decays.get(&pdg_id)
     }
 
     fn insert_block(
@@ -260,6 +297,19 @@ impl<'a> Slha<'a> {
         };
         Ok(())
     }
+
+    fn insert_decay(
+        &mut self,
+        pdg_id: i64,
+        width: f64,
+        decays: Vec<Decay>,
+    ) -> Result<(), ParseError> {
+        if self.decays.contains_key(&pdg_id) {
+            return Err(ParseError::DuplicateDecay(pdg_id));
+        }
+        self.decays.insert(pdg_id, DecayTable { width, decays });
+        Ok(())
+    }
 }
 
 fn parse_segment<'a>(
@@ -276,6 +326,7 @@ fn parse_segment<'a>(
     match next_word(line) {
         Some((kw, rest)) => Some(match kw.to_lowercase().as_ref() {
             "block" => parse_block(rest, input),
+            "decay" => parse_decay_table(rest, input),
             kw => Err(ParseError::UnknownSegment(kw.to_string())),
         }),
         None => unreachable!("All empty lines have been skipped, so this line MUST NOT be empty."),
@@ -358,6 +409,87 @@ fn parse_block_scale(header: &str) -> Result<Option<f64>, ParseError> {
     }
 }
 
+fn parse_decay_table<'a, Iter>(
+    header: &str,
+    input: &mut iter::Peekable<Iter>,
+) -> Result<Segment<'a>, ParseError>
+where
+    Iter: Iterator<Item = &'a str>,
+{
+    let (pdg_id, width) = parse_decay_table_header(header)?;
+    let mut decays = Vec::new();
+    loop {
+        {
+            skip_empty_lines(input);
+            let line = match input.peek() {
+                Some(line) => line,
+                None => break,
+            };
+            if !line.starts_with(|c: char| c.is_whitespace()) {
+                break;
+            }
+            let (data, _) = split_comment(line.trim());
+            decays.push(parse_decay(data)?);
+        }
+        input.next();
+    }
+    Ok(Segment::Decay {
+        pdg_id,
+        width,
+        decays,
+    })
+}
+
+fn parse_decay_table_header(header: &str) -> Result<(i64, f64), ParseError> {
+    let (data, _) = split_comment(header);
+    let (pdg_id, rest) = match next_word(data) {
+        None => return Err(ParseError::MissingDecayingParticle),
+        Some(s) => s,
+    };
+    let pdg_id = match str::parse(pdg_id) {
+        Ok(id) => id,
+        Err(e) => return Err(ParseError::InvalidPdgId(e)),
+    };
+    let width = match str::parse(rest.trim()) {
+        Ok(width) => width,
+        Err(e) => return Err(ParseError::InvalidWidth(e)),
+    };
+    Ok((pdg_id, width))
+}
+
+fn parse_decay(line: &str) -> Result<Decay, ParseError> {
+    let mut rest = line;
+    let branching_ratio = match f64::parse(rest) {
+        ParseResult::Done(r, value) => {
+            rest = r;
+            value
+        }
+        ParseResult::Error(e) => return Err(ParseError::InvalidBranchingRatio(Box::new(e))),
+    };
+    let n_daughters = match u8::parse(rest) {
+        ParseResult::Done(r, value) => {
+            rest = r;
+            value
+        }
+        ParseResult::Error(e) => return Err(ParseError::InvalidNumOfDaughters(Box::new(e))),
+    };
+    let mut daughters = Vec::new();
+    for _ in 0..n_daughters {
+        let daughter_id = match i64::parse(rest) {
+            ParseResult::Done(r, value) => {
+                rest = r;
+                value
+            }
+            ParseResult::Error(e) => return Err(ParseError::InvalidDaughterId(Box::new(e))),
+        };
+        daughters.push(daughter_id);
+    }
+    Ok(Decay {
+        branching_ratio,
+        daughters,
+    })
+}
+
 fn split_comment(line: &str) -> (&str, Option<&str>) {
     let start = match line.find('#') {
         None => return (line, None),
@@ -369,7 +501,7 @@ fn split_comment(line: &str) -> (&str, Option<&str>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Slha, Block, Parseable, ParseResult};
+    use super::{Slha, Block, Parseable, ParseResult, Decay};
     use super::next_word;
 
     #[test]
@@ -445,6 +577,118 @@ block Mass
         let block: Block<i64, f64> = slha.get_block("mass").unwrap().unwrap();
         assert_eq!(block.map.len(), 1);
         assert_eq!(block.map[&6], 173.2);
+    }
+
+    #[test]
+    fn test_parse_decay_table() {
+        let input = "\
+DECAY   6    1.3
+    0.5    2    3   4
+    0.25    3    4   5  6
+    0.25    4    5   6  7  8
+";
+        let slha = Slha::parse(input).unwrap();
+        let dec = slha.get_decay(6).unwrap();
+        assert_eq!(dec.width, 1.3);
+        assert_eq!(dec.decays.len(), 3);
+        assert_eq!(
+            dec.decays[0],
+            Decay {
+                branching_ratio: 0.5,
+                daughters: vec![3, 4],
+            }
+        );
+        assert_eq!(
+            dec.decays[1],
+            Decay {
+                branching_ratio: 0.25,
+                daughters: vec![4, 5, 6],
+            }
+        );
+        assert_eq!(
+            dec.decays[2],
+            Decay {
+                branching_ratio: 0.25,
+                daughters: vec![5, 6, 7, 8],
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_decay_table_line_comments() {
+        let input = "\
+DECAY   6    1.3   # top quark decays
+    0.5    2    3   4   # BR(t -> 3 4)
+    0.25    3    4   5  6 # BR(t -> 4 5 6)
+    0.25    4    5   6  7  8      # BR(t -> 5 6 7 8)
+";
+        let slha = Slha::parse(input).unwrap();
+        let dec = slha.get_decay(6).unwrap();
+        assert_eq!(dec.width, 1.3);
+        assert_eq!(dec.decays.len(), 3);
+        assert_eq!(
+            dec.decays[0],
+            Decay {
+                branching_ratio: 0.5,
+                daughters: vec![3, 4],
+            }
+        );
+        assert_eq!(
+            dec.decays[1],
+            Decay {
+                branching_ratio: 0.25,
+                daughters: vec![4, 5, 6],
+            }
+        );
+        assert_eq!(
+            dec.decays[2],
+            Decay {
+                branching_ratio: 0.25,
+                daughters: vec![5, 6, 7, 8],
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_decay_table_comments() {
+        let input = "\
+# The decay table for a VERY fictional top quark
+DECAY   6    1.3   # top quark decays
+    # A top decaying into c and s would be very weird...
+    0.5    2    3   4   # BR(t -> 3 4)
+    # but not nearly as bad as decaying into c b t
+    # where the top actually decays into itself.
+    0.25    3    4   5  6 # BR(t -> 4 5 6)
+    # And again, top -> top + other crap.
+    0.25    4    5   6  7  8      # BR(t -> 5 6 7 8)
+    # So, very fictional indeed.
+    # But it's just an example to test the parser, so this doesn't matter at all.
+";
+        let slha = Slha::parse(input).unwrap();
+        let dec = slha.get_decay(6).unwrap();
+        assert_eq!(dec.width, 1.3);
+        assert_eq!(dec.decays.len(), 3);
+        assert_eq!(
+            dec.decays[0],
+            Decay {
+                branching_ratio: 0.5,
+                daughters: vec![3, 4],
+            }
+        );
+        assert_eq!(
+            dec.decays[1],
+            Decay {
+                branching_ratio: 0.25,
+                daughters: vec![4, 5, 6],
+            }
+        );
+        assert_eq!(
+            dec.decays[2],
+            Decay {
+                branching_ratio: 0.25,
+                daughters: vec![5, 6, 7, 8],
+            }
+        );
     }
 
     #[test]
@@ -658,5 +902,188 @@ Block hmix Q= 4.64649125e+02  # Higgs mixing parameters
         assert_eq!(hmix.map[&2], 9.75139550e+00);
         assert_eq!(hmix.map[&3], 2.44923506e+02);
         assert_eq!(hmix.map[&4], 1.69697051e+04);
+    }
+
+    #[test]
+    fn test_example_decay() {
+        // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example decay file
+# Info from decay package
+Block DCINFO          # Program information
+     1    SDECAY       # Decay package
+     2    1.0          # version number
+#         PDG           Width
+DECAY   1000021    1.01752300e+00   # gluino decays
+#          BR         NDA      ID1       ID2
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+        let slha = Slha::parse(input).unwrap();
+        let dcinfo: Block<u8, String> = slha.get_block("dcinfo").unwrap().unwrap();
+        assert_eq!(dcinfo.map.len(), 2);
+        assert_eq!(dcinfo.map[&1], "SDECAY");
+        assert_eq!(dcinfo.map[&2], "1.0");
+        let dec = slha.get_decay(1000021).unwrap();
+        assert_eq!(dec.width, 1.01752300e+00);
+        assert_eq!(dec.decays.len(), 20);
+        assert_eq!(
+            dec.decays[0],
+            Decay {
+                branching_ratio: 4.18313300E-02,
+                daughters: vec![1000001, -1],
+            }
+        );
+        assert_eq!(
+            dec.decays[1],
+            Decay {
+                branching_ratio: 1.55587600E-02,
+                daughters: vec![2000001, -1],
+            }
+        );
+        assert_eq!(
+            dec.decays[2],
+            Decay {
+                branching_ratio: 3.91391000E-02,
+                daughters: vec![1000002, -2],
+            }
+        );
+        assert_eq!(
+            dec.decays[3],
+            Decay {
+                branching_ratio: 1.74358200E-02,
+                daughters: vec![2000002, -2],
+            }
+        );
+        assert_eq!(
+            dec.decays[4],
+            Decay {
+                branching_ratio: 4.18313300E-02,
+                daughters: vec![1000003, -3],
+            }
+        );
+        assert_eq!(
+            dec.decays[5],
+            Decay {
+                branching_ratio: 1.55587600E-02,
+                daughters: vec![2000003, -3],
+            }
+        );
+        assert_eq!(
+            dec.decays[6],
+            Decay {
+                branching_ratio: 3.91391000E-02,
+                daughters: vec![1000004, -4],
+            }
+        );
+        assert_eq!(
+            dec.decays[7],
+            Decay {
+                branching_ratio: 1.74358200E-02,
+                daughters: vec![2000004, -4],
+            }
+        );
+        assert_eq!(
+            dec.decays[8],
+            Decay {
+                branching_ratio: 1.13021900E-01,
+                daughters: vec![1000005, -5],
+            }
+        );
+        assert_eq!(
+            dec.decays[9],
+            Decay {
+                branching_ratio: 6.30339800E-02,
+                daughters: vec![2000005, -5],
+            }
+        );
+        assert_eq!(
+            dec.decays[10],
+            Decay {
+                branching_ratio: 9.60140900E-02,
+                daughters: vec![1000006, -6],
+            }
+        );
+        assert_eq!(
+            dec.decays[11],
+            Decay {
+                branching_ratio: 0.00000000E+00,
+                daughters: vec![2000006, -6],
+            }
+        );
+        assert_eq!(
+            dec.decays[12],
+            Decay {
+                branching_ratio: 4.18313300E-02,
+                daughters: vec![-1000001, 1],
+            }
+        );
+        assert_eq!(
+            dec.decays[13],
+            Decay {
+                branching_ratio: 1.55587600E-02,
+                daughters: vec![-2000001, 1],
+            }
+        );
+        assert_eq!(
+            dec.decays[14],
+            Decay {
+                branching_ratio: 3.91391000E-02,
+                daughters: vec![-1000002, 2],
+            }
+        );
+        assert_eq!(
+            dec.decays[15],
+            Decay {
+                branching_ratio: 1.74358200E-02,
+                daughters: vec![-2000002, 2],
+            }
+        );
+        assert_eq!(
+            dec.decays[16],
+            Decay {
+                branching_ratio: 4.18313300E-02,
+                daughters: vec![-1000003, 3],
+            }
+        );
+        assert_eq!(
+            dec.decays[17],
+            Decay {
+                branching_ratio: 1.55587600E-02,
+                daughters: vec![-2000003, 3],
+            }
+        );
+        assert_eq!(
+            dec.decays[18],
+            Decay {
+                branching_ratio: 3.91391000E-02,
+                daughters: vec![-1000004, 4],
+            }
+        );
+        assert_eq!(
+            dec.decays[19],
+            Decay {
+                branching_ratio: 1.74358200E-02,
+                daughters: vec![-2000004, 4],
+            }
+        );
     }
 }
