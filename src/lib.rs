@@ -13,7 +13,7 @@ pub trait SlhaBlock<E>: Sized {
     fn parse<'a>(&[Line<'a>]) -> Result<Self, E>;
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParseResult<'input, T> {
     Done(&'input str, T),
     Error(ParseError),
@@ -30,7 +30,7 @@ impl<'input, T> ParseResult<'input, T> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ParseError {
     IncompleteParse(String),
     UnexpectedEol,
@@ -52,6 +52,7 @@ pub enum ParseError {
     InvalidDaughterId(Box<ParseError>),
     WrongNumberOfValues(usize),
 }
+
 pub trait Parseable: Sized {
     fn parse<'input>(&'input str) -> ParseResult<'input, Self>;
 }
@@ -128,19 +129,11 @@ impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10);
 impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11);
 impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12);
 
-fn next_word(input: &str) -> Option<(&str, &str)> {
-    let input = input.trim_left();
-    if input.is_empty() {
-        return None;
-    }
-    let index = match input.find(|c: char| c.is_whitespace()) {
-        Some(index) => index,
-        None => return Some((input, "")),
-    };
-    Some(input.split_at(index))
-}
-
-pub struct Block<Key, Value> {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Block<Key, Value>
+where
+    Key: Hash + Eq,
+{
     pub map: HashMap<Key, Value>,
 }
 impl<Key, Value> SlhaBlock<ParseError> for Block<Key, Value>
@@ -174,6 +167,7 @@ where
     ParseResult::Done(input, (key, value))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BlockSingle<Value> {
     pub value: Value,
 }
@@ -190,33 +184,34 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DecayTable {
-    width: f64,
-    decays: Vec<Decay>,
+    pub width: f64,
+    pub decays: Vec<Decay>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Decay {
-    branching_ratio: f64,
-    daughters: Vec<i64>,
+    pub branching_ratio: f64,
+    pub daughters: Vec<i64>,
 }
 
 /// A line read from an SLHA file.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Line<'input> {
     /// The data contained in the line.
-    data: &'input str,
+    pub data: &'input str,
     /// The comment at the end of the line, if present.
-    comment: Option<&'input str>,
+    pub comment: Option<&'input str>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 enum BlockScale<'a> {
     WithScale(Vec<(f64, Vec<Line<'a>>)>),
     WithoutScale(Vec<Line<'a>>),
 }
 
+#[derive(Clone, Debug, PartialEq)]
 enum Segment<'a> {
     Block {
         name: String,
@@ -231,7 +226,7 @@ enum Segment<'a> {
 }
 
 /// An SLHA file.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Slha<'a> {
     blocks: HashMap<String, BlockScale<'a>>,
     decays: HashMap<i64, DecayTable>,
@@ -347,23 +342,6 @@ fn parse_segment<'a>(
             kw => Err(ParseError::UnknownSegment(kw.to_string())),
         }),
         None => unreachable!("All empty lines have been skipped, so this line MUST NOT be empty."),
-    }
-}
-
-fn skip_empty_lines<'a, Iter>(input: &mut iter::Peekable<Iter>)
-where
-    Iter: Iterator<Item = &'a str>,
-{
-    loop {
-        let line = match input.peek() {
-            Some(line) => line.trim(),
-            None => break,
-        };
-        if line.is_empty() || line.starts_with('#') {
-            input.next();
-        } else {
-            break;
-        }
     }
 }
 
@@ -505,6 +483,35 @@ fn parse_decay(line: &str) -> Result<Decay, ParseError> {
         branching_ratio,
         daughters,
     })
+}
+
+fn skip_empty_lines<'a, Iter>(input: &mut iter::Peekable<Iter>)
+where
+    Iter: Iterator<Item = &'a str>,
+{
+    loop {
+        let line = match input.peek() {
+            Some(line) => line.trim(),
+            None => break,
+        };
+        if line.is_empty() || line.starts_with('#') {
+            input.next();
+        } else {
+            break;
+        }
+    }
+}
+
+fn next_word(input: &str) -> Option<(&str, &str)> {
+    let input = input.trim_left();
+    if input.is_empty() {
+        return None;
+    }
+    let index = match input.find(|c: char| c.is_whitespace()) {
+        Some(index) => index,
+        None => return Some((input, "")),
+    };
+    Some(input.split_at(index))
 }
 
 fn split_comment(line: &str) -> (&str, Option<&str>) {
