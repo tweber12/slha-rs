@@ -22,9 +22,9 @@ impl<'input, T> ParseResult<'input, T> {
     fn end(self) -> Result<T, ParseError> {
         match self {
             ParseResult::Error(e) => Err(e),
-            ParseResult::Done(input, _) if !input.is_empty() => Err(ParseError::IncompleteParse(
-                input.to_string(),
-            )),
+            ParseResult::Done(input, _) if !input.trim().is_empty() => Err(
+                ParseError::IncompleteParse(input.to_string()),
+            ),
             ParseResult::Done(_, value) => Ok(value),
         }
     }
@@ -50,6 +50,7 @@ pub enum ParseError {
     InvalidBranchingRatio(Box<ParseError>),
     InvalidNumOfDaughters(Box<ParseError>),
     InvalidDaughterId(Box<ParseError>),
+    WrongNumberOfValues(usize),
 }
 pub trait Parseable: Sized {
     fn parse<'input>(&'input str) -> ParseResult<'input, Self>;
@@ -171,6 +172,22 @@ where
         ParseResult::Error(e) => return ParseResult::Error(e),
     };
     ParseResult::Done(input, (key, value))
+}
+
+pub struct BlockSingle<Value> {
+    pub value: Value,
+}
+impl<Value> SlhaBlock<ParseError> for BlockSingle<Value>
+where
+    Value: Parseable,
+{
+    fn parse<'input>(lines: &[Line<'input>]) -> Result<Self, ParseError> {
+        if lines.len() != 1 {
+            return Err(ParseError::WrongNumberOfValues(lines.len()));
+        }
+        let value = Value::parse(lines[0].data).end()?;
+        Ok(BlockSingle { value })
+    }
 }
 
 #[derive(Debug)]
@@ -501,7 +518,7 @@ fn split_comment(line: &str) -> (&str, Option<&str>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Slha, Block, Parseable, ParseResult, Decay};
+    use super::{Slha, Block, BlockSingle, Parseable, ParseResult, Decay};
     use super::next_word;
 
     #[test]
@@ -769,6 +786,8 @@ Block MINPAR  # SUSY breaking input parameters
     fn test_example_2() {
         // Pieces of the example file from appendix D.2 of the slha1 paper(arXiv:hep-ph/0311123)
         let input = "
+Block alpha   # Effective Higgs mixing parameter
+          -1.13716828e-01   # alpha
 Block stopmix  # stop mixing matrix
   1  1     5.37975095e-01   # O_{11}
   1  2     8.42960733e-01   # O_{12}
@@ -787,6 +806,8 @@ Block staumix  # stau mixing matrix
 ";
         let slha = Slha::parse(input).unwrap();
         println!("{:?}", slha);
+        let alpha: BlockSingle<f64> = slha.get_block("alpha").unwrap().unwrap();
+        assert_eq!(alpha.value, -1.13716828e-01);
         let stopmix: Block<(u8, u8), f64> = slha.get_block("stopmix").unwrap().unwrap();
         assert_eq!(stopmix.map.len(), 4);
         assert_eq!(stopmix.map[&(1, 1)], 5.37975095e-01);
@@ -805,6 +826,19 @@ Block staumix  # stau mixing matrix
         assert_eq!(staumix.map[&(1, 2)], 9.60465267e-01);
         assert_eq!(staumix.map[&(2, 1)], 9.60465267e-01);
         assert_eq!(staumix.map[&(2, 2)], -2.78399839e-01);
+    }
+
+    #[test]
+    fn test_alpha() {
+        // Pieces of the example file from appendix D.2 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "
+Block alpha   # Effective Higgs mixing parameter
+          -1.13716828e-01   # alpha
+";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let alpha: BlockSingle<f64> = slha.get_block("alpha").unwrap().unwrap();
+        assert_eq!(alpha.value, -1.13716828e-01);
     }
 
     #[test]
