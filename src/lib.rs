@@ -254,7 +254,8 @@ impl<'a> Slha<'a> {
 
     /// Lookup a block.
     pub fn get_block<B: SlhaBlock<E>, E>(&self, name: &str) -> Option<Result<B, E>> {
-        let block = match self.blocks.get(name) {
+        let name = name.to_lowercase();
+        let block = match self.blocks.get(&name) {
             Some(lines) => lines,
             None => return None,
         };
@@ -601,6 +602,24 @@ block Mass
         let block: Block<i64, f64> = slha.get_block("mass").unwrap().unwrap();
         assert_eq!(block.map.len(), 1);
         assert_eq!(block.map[&6], 173.2);
+    }
+
+    #[test]
+    fn test_get_block_case() {
+        let input = "\
+BLOCK TEST
+ 1 3
+ 4 6
+";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let _: Block<i64, i64> = slha.get_block("TEST").unwrap().unwrap();
+        let _: Block<i64, i64> = slha.get_block("tEsT").unwrap().unwrap();
+        let _: Block<i64, i64> = slha.get_block("TesT").unwrap().unwrap();
+        let block: Block<i64, i64> = slha.get_block("test").unwrap().unwrap();
+        assert_eq!(block.map.len(), 2);
+        assert_eq!(block.map[&1], 3);
+        assert_eq!(block.map[&4], 6);
     }
 
     #[test]
