@@ -1,0 +1,8 @@
+[package]
+name = "slha-test"
+version = "0.1.0"
+authors = ["Torsten Weber <tweber@physik.rwth-aachen.de>"]
+
+[dev_dependencies]
+slha = { path = "../slha" }
+slha-derive = { path = "../slha-derive" }

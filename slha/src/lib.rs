@@ -4,6 +4,10 @@ use std::iter;
 use std::num::{ParseFloatError, ParseIntError};
 use std::str;
 
+pub trait SlhaDeserialize {
+    fn deserialize(&str) -> Self;
+}
+
 /// A trait for blocks that can be read from an SLHA file.
 pub trait SlhaBlock<E>: Sized {
     /// Parse the block from an SLHA file.
@@ -150,6 +154,10 @@ where
     }
 }
 
+pub fn parse_block_from<'a, B: SlhaBlock<ParseError>>(input: &[Line<'a>]) -> Result<B, ParseError> {
+    B::parse(input)
+}
+
 fn parse_line_block<'input, K, V>(input: &'input str) -> ParseResult<'input, (K, V)>
 where
     K: Parseable,
@@ -212,7 +220,7 @@ enum BlockScale<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum Segment<'a> {
+pub enum Segment<'a> {
     Block {
         name: String,
         block: Vec<Line<'a>>,
@@ -325,7 +333,7 @@ impl<'a> Slha<'a> {
     }
 }
 
-fn parse_segment<'a>(
+pub fn parse_segment<'a>(
     input: &mut iter::Peekable<str::Lines<'a>>,
 ) -> Option<Result<Segment<'a>, ParseError>> {
     skip_empty_lines(input);

@@ -1,0 +1,11 @@
+[package]
+name = "slha-derive"
+version = "0.1.0"
+authors = ["Torsten Weber <tweber@physik.rwth-aachen.de>"]
+
+[lib]
+proc_macro = true
+
+[dependencies]
+syn = "*"
+quote = "*"
