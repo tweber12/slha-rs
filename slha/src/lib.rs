@@ -4,8 +4,8 @@ use std::iter;
 use std::num::{ParseFloatError, ParseIntError};
 use std::str;
 
-pub trait SlhaDeserialize {
-    fn deserialize(&str) -> Self;
+pub trait SlhaDeserialize: Sized {
+    fn deserialize(&str) -> Result<Self, ParseError>;
 }
 
 /// A trait for blocks that can be read from an SLHA file.

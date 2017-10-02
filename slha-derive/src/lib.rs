@@ -43,13 +43,13 @@ fn impl_slha_deserialize(ast: &syn::DeriveInput) -> quote::Tokens {
     let assign = struct_assign(&fields, has_decays, &is_vec);
     quote! {
         impl slha::SlhaDeserialize for #name {
-            fn deserialize(input: &str) -> #name {
+            fn deserialize(input: &str) -> Result<#name, slha::ParseError> {
                 #(#vars)*
                 let mut decay_tables = ::std::collections::HashMap::new();
 
                 let mut lines = input.lines().peekable();
                 while let Some(segment) = slha::parse_segment(&mut lines) {
-                    match segment.unwrap() {
+                    match segment? {
                         slha::Segment::Block { name, block, scale } => {
                             match name.as_ref() {
                                 #(#matches)*
@@ -66,9 +66,9 @@ fn impl_slha_deserialize(ast: &syn::DeriveInput) -> quote::Tokens {
                     }
                 }
 
-                #name {
+                Ok(#name {
                     #(#assign)*
-                }
+                })
             }
         }
     }
@@ -122,7 +122,7 @@ fn match_arms(fields: &[syn::Field], is_vec: &HashSet<&syn::Field>) -> Vec<quote
             if is_vec.contains(&field) {
                 quote! {
                     #match_str => {
-                        #name.push(slha::parse_block_from(&block).unwrap())
+                        #name.push(slha::parse_block_from(&block)?)
                     }
                 }
             } else {
@@ -130,7 +130,7 @@ fn match_arms(fields: &[syn::Field], is_vec: &HashSet<&syn::Field>) -> Vec<quote
                     #match_str => { #name = if #name.is_some() {
                         panic!("The block {} appears twice!", name)
                     } else {
-                        Some(slha::parse_block_from(&block).unwrap())
+                        Some(slha::parse_block_from(&block)?)
                     }},
                 }
             }

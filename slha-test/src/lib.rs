@@ -42,7 +42,7 @@ Block MINPAR  # SUSY breaking input parameters
         sminputs: Block<i8, f64>,
     }
 
-    let slha = MySlha::deserialize(input);
+    let slha = MySlha::deserialize(input).unwrap();
     println!("{:?}", slha);
     let sminputs = &slha.sminputs;
     assert_eq!(sminputs.map.len(), 3);
@@ -100,7 +100,7 @@ DECAY   1000021    1.01752300e+00   # gluino decays
         dcinfo: Block<i8, String>,
         decays: HashMap<i64, DecayTable>,
     }
-    let slha = MySlha::deserialize(input);
+    let slha = MySlha::deserialize(input).unwrap();
     let dcinfo = &slha.dcinfo;
     assert_eq!(dcinfo.map.len(), 2);
     assert_eq!(dcinfo.map[&1], "SDECAY");
@@ -272,7 +272,7 @@ Block ye Q= 4.64649125e+03
         ye: Vec<Block<(i8, i8), f64>>,
     }
 
-    let slha = MySlha::deserialize(input);
+    let slha = MySlha::deserialize(input).unwrap();
     println!("{:?}", slha);
     let yu = &slha.yu;
     assert_eq!(yu.len(), 1);
