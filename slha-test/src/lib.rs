@@ -286,3 +286,86 @@ Block ye Q= 4.64649125e+03
     assert_eq!(ye[0].map[&(3, 3)], 9.97405356e-02);
     assert_eq!(ye[1].map[&(3, 3)], 9.97405356e-03);
 }
+
+#[test]
+fn test_example_1_option_some() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      4.25    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: Block<i8, i8>,
+        minpar: Option<Block<i8, f64>>,
+        sminputs: Option<Block<i8, f64>>,
+    }
+
+    let slha = MySlha::deserialize(input).unwrap();
+    println!("{:?}", slha);
+    let sminputs = &slha.sminputs.unwrap();
+    assert_eq!(sminputs.map.len(), 3);
+    assert_eq!(sminputs.map[&3], 0.1172);
+    assert_eq!(sminputs.map[&5], 4.25);
+    assert_eq!(sminputs.map[&6], 174.3);
+    let modsel = &slha.modsel;
+    assert_eq!(modsel.map.len(), 1);
+    assert_eq!(modsel.map[&1], 1);
+    let minpar = &slha.minpar.unwrap();
+    assert_eq!(minpar.map.len(), 5);
+    assert_eq!(minpar.map[&3], 10.0);
+    assert_eq!(minpar.map[&4], 1.0);
+    assert_eq!(minpar.map[&1], 100.0);
+    assert_eq!(minpar.map[&2], 250.0);
+    assert_eq!(minpar.map[&5], -100.0);
+}
+
+#[test]
+fn test_example_1_option_none() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: Block<i8, i8>,
+        minpar: Option<Block<i8, f64>>,
+        sminputs: Option<Block<i8, f64>>,
+    }
+
+    let slha = MySlha::deserialize(input).unwrap();
+    println!("{:?}", slha);
+    let sminputs = &slha.sminputs;
+    assert!(sminputs.is_none());
+    let modsel = &slha.modsel;
+    assert_eq!(modsel.map.len(), 1);
+    assert_eq!(modsel.map[&1], 1);
+    let minpar = &slha.minpar.unwrap();
+    assert_eq!(minpar.map.len(), 5);
+    assert_eq!(minpar.map[&3], 10.0);
+    assert_eq!(minpar.map[&4], 1.0);
+    assert_eq!(minpar.map[&1], 100.0);
+    assert_eq!(minpar.map[&2], 250.0);
+    assert_eq!(minpar.map[&5], -100.0);
+}
