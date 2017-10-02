@@ -138,10 +138,13 @@ fn struct_assign(fields: &[Field]) -> Vec<quote::Tokens> {
         .iter()
         .map(|field| {
             let name = field.field.ident.as_ref().unwrap();
+            let name_str = format!("{}", name).to_lowercase();
             match field.mode {
                 FieldMode::Vector | FieldMode::Optional => quote! { #name, },
                 FieldMode::Decays => quote! { decays: decay_tables, },
-                FieldMode::Normal => quote! { #name: #name.expect("Missing field"), },
+                FieldMode::Normal => {
+                    quote! { #name: #name.ok_or_else(|| { slha::ParseError::MissingBlock(#name_str.to_string()) })?, }
+                }
             }
         })
         .collect()
@@ -165,7 +168,7 @@ fn match_arms(fields: &[Field]) -> Vec<quote::Tokens> {
                 FieldMode::Normal | FieldMode::Optional => {
                     quote! {
                     #match_str => { #name = if #name.is_some() {
-                        panic!("The block {} appears twice!", name)
+                        return Err(slha::ParseError::DuplicateBlock(name))
                     } else {
                         Some(slha::parse_block_from(&block, scale)?)
                     }},

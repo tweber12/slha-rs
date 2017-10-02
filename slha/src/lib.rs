@@ -55,6 +55,7 @@ pub enum ParseError {
     InvalidNumOfDaughters(Box<ParseError>),
     InvalidDaughterId(Box<ParseError>),
     WrongNumberOfValues(usize),
+    MissingBlock(String),
 }
 
 pub trait Parseable: Sized {
