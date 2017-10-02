@@ -122,7 +122,7 @@ fn match_arms(fields: &[syn::Field], is_vec: &HashSet<&syn::Field>) -> Vec<quote
             if is_vec.contains(&field) {
                 quote! {
                     #match_str => {
-                        #name.push(slha::parse_block_from(&block)?)
+                        #name.push(slha::parse_block_from(&block, scale)?)
                     }
                 }
             } else {
@@ -130,7 +130,7 @@ fn match_arms(fields: &[syn::Field], is_vec: &HashSet<&syn::Field>) -> Vec<quote
                     #match_str => { #name = if #name.is_some() {
                         panic!("The block {} appears twice!", name)
                     } else {
-                        Some(slha::parse_block_from(&block)?)
+                        Some(slha::parse_block_from(&block, scale)?)
                     }},
                 }
             }

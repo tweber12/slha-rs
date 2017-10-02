@@ -14,7 +14,7 @@ pub trait SlhaBlock<E>: Sized {
     ///
     /// The argument of the `parse` function are all lines that belong
     /// to the block.
-    fn parse<'a>(&[Line<'a>]) -> Result<Self, E>;
+    fn parse<'a>(&[Line<'a>], scale: Option<f64>) -> Result<Self, E>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -133,11 +133,12 @@ impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10);
 impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11);
 impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Block<Key, Value>
 where
     Key: Hash + Eq,
 {
+    pub scale: Option<f64>,
     pub map: HashMap<Key, Value>,
 }
 impl<Key, Value> SlhaBlock<ParseError> for Block<Key, Value>
@@ -145,17 +146,20 @@ where
     Key: Hash + Eq + Parseable,
     Value: Parseable,
 {
-    fn parse<'input>(lines: &[Line<'input>]) -> Result<Self, ParseError> {
+    fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self, ParseError> {
         let map: Result<HashMap<Key, Value>, ParseError> = lines
             .iter()
             .map(|line| parse_line_block(line.data).end())
             .collect();
-        Ok(Block { map: map? })
+        Ok(Block { map: map?, scale })
     }
 }
 
-pub fn parse_block_from<'a, B: SlhaBlock<ParseError>>(input: &[Line<'a>]) -> Result<B, ParseError> {
-    B::parse(input)
+pub fn parse_block_from<'a, B: SlhaBlock<ParseError>>(
+    input: &[Line<'a>],
+    scale: Option<f64>,
+) -> Result<B, ParseError> {
+    B::parse(input, scale)
 }
 
 fn parse_line_block<'input, K, V>(input: &'input str) -> ParseResult<'input, (K, V)>
@@ -175,20 +179,21 @@ where
     ParseResult::Done(input, (key, value))
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BlockSingle<Value> {
     pub value: Value,
+    pub scale: Option<f64>,
 }
 impl<Value> SlhaBlock<ParseError> for BlockSingle<Value>
 where
     Value: Parseable,
 {
-    fn parse<'input>(lines: &[Line<'input>]) -> Result<Self, ParseError> {
+    fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self, ParseError> {
         if lines.len() != 1 {
             return Err(ParseError::WrongNumberOfValues(lines.len()));
         }
         let value = Value::parse(lines[0].data).end()?;
-        Ok(BlockSingle { value })
+        Ok(BlockSingle { value, scale })
     }
 }
 
@@ -217,6 +222,20 @@ pub struct Line<'input> {
 enum BlockScale<'a> {
     WithScale(Vec<(f64, Vec<Line<'a>>)>),
     WithoutScale(Vec<Line<'a>>),
+}
+impl<'a> BlockScale<'a> {
+    fn to_block<B, E>(&self) -> Result<B, E>
+    where
+        B: SlhaBlock<E>,
+    {
+        match *self {
+            BlockScale::WithoutScale(ref lines) => B::parse(lines, None),
+            BlockScale::WithScale(ref vec) => {
+                let (scale, ref lines) = vec[0];
+                B::parse(&lines, Some(scale))
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -267,11 +286,7 @@ impl<'a> Slha<'a> {
             Some(lines) => lines,
             None => return None,
         };
-        let lines = match block {
-            &BlockScale::WithoutScale(ref lines) => lines,
-            &BlockScale::WithScale(ref blocks) => &(blocks[0].1),
-        };
-        Some(B::parse(lines))
+        Some(block.to_block())
     }
 
     pub fn get_decay(&self, pdg_id: i64) -> Option<&DecayTable> {
