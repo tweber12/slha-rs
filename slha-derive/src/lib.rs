@@ -26,7 +26,7 @@ fn impl_slha_deserialize(ast: &syn::DeriveInput) -> quote::Tokens {
     };
     let (fields, has_decays) = Field::from_struct_ast(fields);
     let vars = let_bindings(&fields);
-    let matches = match_arms(&fields);
+    let blocks = match_blocks(&fields);
     let decay = insert_decay(has_decays);
     let assign = struct_assign(&fields);
     let validate = validate_vecs(&fields);
@@ -37,12 +37,7 @@ fn impl_slha_deserialize(ast: &syn::DeriveInput) -> quote::Tokens {
                 let mut lines = input.lines().peekable();
                 while let Some(segment) = slha::parse_segment(&mut lines) {
                     match segment? {
-                        slha::Segment::Block { name, block, scale } => {
-                            match name.as_ref() {
-                                #(#matches)*
-                                _ => continue,
-                            }
-                        },
+                        #blocks
                         #decay
                     }
                 }
@@ -129,9 +124,7 @@ fn insert_decay(has_decays: bool) -> quote::Tokens {
         }
     } else {
         quote! {
-            slha::Segment::Decay { .. } => {
-                continue;
-            }
+            slha::Segment::Decay { .. } => continue,
         }
     }
 }
@@ -178,6 +171,24 @@ fn struct_assign(fields: &[Field]) -> Vec<quote::Tokens> {
             }
         })
         .collect()
+}
+
+fn match_blocks(fields: &[Field]) -> quote::Tokens {
+    let arms = match_arms(fields);
+    if arms.is_empty() {
+        quote!{
+            slha::Segment::Block { .. } => continue,
+        }
+    } else {
+        quote!{
+            slha::Segment::Block { name, block, scale } => {
+                match name.as_ref() {
+                    #(#arms)*
+                    _ => continue,
+                }
+            },
+        }
+    }
 }
 
 fn match_arms(fields: &[Field]) -> Vec<quote::Tokens> {
