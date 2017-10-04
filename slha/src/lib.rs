@@ -17,7 +17,7 @@ pub trait SlhaBlock<E>: Sized {
     fn parse<'a>(&[Line<'a>], scale: Option<f64>) -> Result<Self, E>;
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ParseResult<'input, T> {
     Done(&'input str, T),
     Error(ParseError),
@@ -34,7 +34,7 @@ impl<'input, T> ParseResult<'input, T> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ParseError {
     IncompleteParse(String),
     UnexpectedEol,
@@ -45,6 +45,7 @@ pub enum ParseError {
     MissingBlockName,
     MalformedBlockHeader(String),
     DuplicateBlock(String),
+    DuplicateBlockScale(String, f64),
     RedefinedBlockWithQ(String),
     InvalidScale(ParseFloatError),
     DuplicateDecay(i64),
