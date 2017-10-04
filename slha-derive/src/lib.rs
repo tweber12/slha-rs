@@ -29,6 +29,7 @@ fn impl_slha_deserialize(ast: &syn::DeriveInput) -> quote::Tokens {
     let matches = match_arms(&fields);
     let decay = insert_decay(has_decays);
     let assign = struct_assign(&fields);
+    let validate = validate_vecs(&fields);
     quote! {
         impl slha::SlhaDeserialize for #name {
             fn deserialize(input: &str) -> Result<#name, slha::ParseError> {
@@ -45,6 +46,8 @@ fn impl_slha_deserialize(ast: &syn::DeriveInput) -> quote::Tokens {
                         #decay
                     }
                 }
+
+                #(#validate)*
 
                 Ok(#name {
                     #(#assign)*
@@ -131,6 +134,33 @@ fn insert_decay(has_decays: bool) -> quote::Tokens {
             }
         }
     }
+}
+
+fn validate_vecs(fields: &[Field]) -> Vec<quote::Tokens> {
+    fields.iter().filter(|field| { field.mode == FieldMode::Vector} ).map(|field| {
+        let name = field.field.ident.as_ref().unwrap();
+        let name_str = format!("{}", name).to_lowercase();
+        quote! {
+            let mut no_scale = false;
+            let mut seen = Vec::new();
+            for block in &#name {
+                if let Some(scale) = block.scale {
+                    if no_scale {
+                        return Err(slha::ParseError::RedefinedBlockWithQ(#name_str.to_string()));
+                    }
+                    if seen.contains(&scale) {
+                        return Err(slha::ParseError::DuplicateBlockScale(#name_str.to_string(), scale));
+                    }
+                    seen.push(scale);
+                } else {
+                    no_scale = true;
+                    if !seen.is_empty() {
+                        return Err(slha::ParseError::RedefinedBlockWithQ(#name_str.to_string()));
+                    }
+                }
+            }
+        }
+    }).collect()
 }
 
 fn struct_assign(fields: &[Field]) -> Vec<quote::Tokens> {

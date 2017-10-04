@@ -5,13 +5,14 @@ extern crate slha;
 extern crate slha_derive;
 
 use std::collections::HashMap;
-use slha::{Block, SlhaDeserialize, DecayTable, Decay};
+use slha::{Block, SlhaDeserialize, DecayTable, Decay, ParseError};
 
 #[test]
 fn test_derive_basic() {
 
     #[derive(SlhaDeserialize)]
     struct Foo {
+        #[allow(dead_code)]
         mass: slha::Block<i64, f64>,
     }
 }
@@ -368,4 +369,553 @@ Block MINPAR  # SUSY breaking input parameters
     assert_eq!(minpar.map[&1], 100.0);
     assert_eq!(minpar.map[&2], 250.0);
     assert_eq!(minpar.map[&5], -100.0);
+}
+
+#[test]
+fn test_incomplete_parse() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      4.25    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1  1  100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: Block<i8, i8>,
+        minpar: Block<i8, f64>,
+        sminputs: Block<i8, f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::IncompleteParse(_) = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of IncompleteParse");
+    }
+}
+
+#[test]
+fn test_unexpected_eol() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5          # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: Block<i8, i8>,
+        minpar: Block<i8, f64>,
+        sminputs: Block<i8, f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::UnexpectedEol = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of UnexpectedEol", err);
+    }
+}
+
+#[test]
+fn test_unexpected_eol_tuple() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88194465e-01   # Yt(Q)MSSM DRbar
+Block yd Q= 40
+    3  3 1.4e-01
+Block yd Q= 50
+    3
+Block ye Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block ye Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+     ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        yu: Vec<Block<(i8, i8), f64>>,
+        yd: Vec<Block<(i8, i8), f64>>,
+        ye: Vec<Block<(i8, i8), f64>>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::UnexpectedEol = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of UnexpectedEol", err);
+    }
+}
+
+#[test]
+fn test_invalid_int() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     a      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: Block<i8, i8>,
+        minpar: Block<i8, f64>,
+        sminputs: Block<i8, f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::InvalidInt(..) = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of InvalidInt", err);
+    }
+}
+
+#[test]
+fn test_invalid_float() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.8819a465e-01   # Yt(Q)MSSM DRbar
+Block yd Q= 40
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block ye Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block ye Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+     ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        yu: Vec<Block<(i8, i8), f64>>,
+        yd: Vec<Block<(i8, i8), f64>>,
+        ye: Vec<Block<(i8, i8), f64>>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::InvalidFloat(..) = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of InvalidFloat", err);
+    }
+}
+
+#[test]
+fn test_unknown_segment() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yd Q= 40
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block ye Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+FLUP ye Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+     ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        yu: Vec<Block<(i8, i8), f64>>,
+        yd: Vec<Block<(i8, i8), f64>>,
+        ye: Vec<Block<(i8, i8), f64>>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::UnknownSegment(e) = err {
+        assert_eq!(&e, "flup");
+    } else {
+        panic!("Wrong error variant {:?} instead of UnknownSegment", err);
+    }
+}
+
+#[test]
+fn test_unexpected_ident() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+ Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: Block<i8, i8>,
+        minpar: Block<i8, f64>,
+        sminputs: Block<i8, f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::UnexpectedIdent(e) = err {
+        assert_eq!(e, " Block MODSEL  # Select model");
+    } else {
+        panic!("Wrong error variant {:?} instead of UnexpectedIdent", err);
+    }
+}
+
+#[test]
+fn test_missing_block_name() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+     ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        yu: Vec<Block<(i8, i8), f64>>,
+        yd: Vec<Block<(i8, i8), f64>>,
+        ye: Block<(i8, i8), f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::MissingBlockName = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of MissingBlockName", err);
+    }
+}
+
+#[test]
+fn test_malformed_block_header() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SM INPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: Block<i8, i8>,
+        minpar: Block<i8, f64>,
+        sminputs: Block<i8, f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::MalformedBlockHeader(e) = err {
+        assert_eq!(e, " INPUTS   ");
+    } else {
+        panic!(
+            "Wrong error variant {:?} instead of MalformedBlockHeader",
+            err
+        );
+    }
+}
+
+#[test]
+fn test_duplicate_block() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MODsel  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: Block<i8, i8>,
+        minpar: Block<i8, f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::DuplicateBlock(e) = err {
+        assert_eq!(e, "modsel");
+    } else {
+        panic!("Wrong error variant {:?} instead of DuplicateBlock", err);
+    }
+}
+
+#[test]
+fn test_duplicate_block_scale() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yu Q= 8
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+     ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        yu: Block<(i8, i8), f64>,
+        yd: Block<(i8, i8), f64>,
+        ye: Block<(i8, i8), f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::DuplicateBlock(e) = err {
+        assert_eq!(&e, "yu");
+    } else {
+        panic!("Wrong error variant {:?} instead of DuplicateBlock", err);
+    }
+}
+
+#[test]
+fn test_duplicate_block_equal_scale() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+Block yf Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yu Q= 8
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+     ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        yu: Vec<Block<(i8, i8), f64>>,
+        yd: Vec<Block<(i8, i8), f64>>,
+        yf: Vec<Block<(i8, i8), f64>>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::DuplicateBlockScale(e, s) = err {
+        assert_eq!(&e, "yf");
+        assert_eq!(s, 4.64649125e+02);
+    } else {
+        panic!(
+            "Wrong error variant {:?} instead of DuplicateBlockScale",
+            err
+        );
+    }
+}
+
+#[test]
+fn test_redefined_block_with_scale_1() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+Block yf
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yu Q= 8
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+     ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        yu: Vec<Block<(i8, i8), f64>>,
+        yd: Vec<Block<(i8, i8), f64>>,
+        yf: Vec<Block<(i8, i8), f64>>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::RedefinedBlockWithQ(e) = err {
+        assert_eq!(&e, "yf");
+    } else {
+        panic!(
+            "Wrong error variant {:?} instead of RedefinedBlockWithQ",
+            err
+        );
+    }
+}
+
+#[test]
+fn test_redefined_block_with_scale_2() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+Block yf Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yu Q= 8
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+     ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        yu: Vec<Block<(i8, i8), f64>>,
+        yd: Vec<Block<(i8, i8), f64>>,
+        yf: Vec<Block<(i8, i8), f64>>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::RedefinedBlockWithQ(e) = err {
+        assert_eq!(&e, "yf");
+    } else {
+        panic!(
+            "Wrong error variant {:?} instead of RedefinedBlockWithQ",
+            err
+        );
+    }
+}
+
+#[test]
+fn test_invalid_scale() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yd Q= 40
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block ye Q= scale # comment
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+     ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        yu: Vec<Block<(i8, i8), f64>>,
+        yd: Vec<Block<(i8, i8), f64>>,
+        ye: Block<(i8, i8), f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::InvalidScale(..) = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of InvalidScale", err);
+    }
+}
+
+#[test]
+fn test_invalid_scale_trailing() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yd Q= 40
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block ye Q= 70 other stuff # comment
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+     ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        yu: Vec<Block<(i8, i8), f64>>,
+        yd: Vec<Block<(i8, i8), f64>>,
+        ye: Block<(i8, i8), f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::InvalidScale(..) = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of InvalidScale", err);
+    }
+}
+
+#[test]
+fn test_missing_block() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yd Q= 40
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+     ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        yu: Vec<Block<(i8, i8), f64>>,
+        yd: Vec<Block<(i8, i8), f64>>,
+        ye: Block<(i8, i8), f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::MissingBlock(e) = err {
+        assert_eq!(&e, "ye");
+    } else {
+        panic!("Wrong error variant {:?} instead of MissingBlock", err);
+    }
 }
