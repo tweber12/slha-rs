@@ -54,6 +54,8 @@ pub enum ParseError {
     InvalidWidth(ParseFloatError),
     InvalidBranchingRatio(Box<ParseError>),
     InvalidNumOfDaughters(Box<ParseError>),
+    NotEnoughDaughters(u8),
+    TooManyDaughters,
     InvalidDaughterId(Box<ParseError>),
     WrongNumberOfValues(usize),
     MissingBlock(String),
@@ -495,7 +497,11 @@ fn parse_decay(line: &str) -> Result<Decay, ParseError> {
         ParseResult::Error(e) => return Err(ParseError::InvalidNumOfDaughters(Box::new(e))),
     };
     let mut daughters = Vec::new();
-    for _ in 0..n_daughters {
+    for i in 0..n_daughters {
+        rest = rest.trim();
+        if rest.is_empty() {
+            return Err(ParseError::NotEnoughDaughters(i));
+        }
         let daughter_id = match i64::parse(rest) {
             ParseResult::Done(r, value) => {
                 rest = r;
@@ -504,6 +510,10 @@ fn parse_decay(line: &str) -> Result<Decay, ParseError> {
             ParseResult::Error(e) => return Err(ParseError::InvalidDaughterId(Box::new(e))),
         };
         daughters.push(daughter_id);
+    }
+    rest.trim();
+    if !rest.is_empty() {
+        return Err(ParseError::TooManyDaughters);
     }
     Ok(Decay {
         branching_ratio,
