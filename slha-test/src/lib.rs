@@ -919,3 +919,422 @@ Block flup Q= 4.64649125e+03
         panic!("Wrong error variant {:?} instead of MissingBlock", err);
     }
 }
+
+#[test]
+fn test_duplicate_decay() {
+    // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025    1.01752300e+00   # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        decays: HashMap<i64, DecayTable>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::DuplicateDecay(e) = err {
+        assert_eq!(e, 1000022);
+    } else {
+        panic!("Wrong error variant {:?} instead of DuplicateDecay", err);
+    }
+}
+
+#[test]
+fn test_missing_decaying_particle() {
+    // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY      # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        decays: HashMap<i64, DecayTable>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::MissingDecayingParticle = err {
+    } else {
+        panic!(
+            "Wrong error variant {:?} instead of MissingDecayingParticle",
+            err
+        );
+    }
+}
+
+#[test]
+fn test_invalid_pdg_id() {
+    // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   100a025    1.01752300e+00   # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        decays: HashMap<i64, DecayTable>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::InvalidPdgId(..) = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of InvalidPdgId", err);
+    }
+}
+
+#[test]
+fn test_invalid_width() {
+    // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025     1,01752300e+00  # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        decays: HashMap<i64, DecayTable>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::InvalidWidth(..) = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of InvalidWidth", err);
+    }
+}
+
+#[test]
+fn test_missing_width() {
+    // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025       # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        decays: HashMap<i64, DecayTable>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::InvalidWidth(..) = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of InvalidWidth", err);
+    }
+}
+
+#[test]
+fn test_invalid_branchingratio() {
+    // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1x13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025     1.01752300e+00  # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        decays: HashMap<i64, DecayTable>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::InvalidBranchingRatio(..) = err {
+    } else {
+        panic!(
+            "Wrong error variant {:?} instead of InvalidBranchingRatio",
+            err
+        );
+    }
+}
+
+#[test]
+fn test_invalid_numofdaughters() {
+    // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025     1.01752300e+00  # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     two  -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        decays: HashMap<i64, DecayTable>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::InvalidNumOfDaughters(..) = err {
+    } else {
+        panic!(
+            "Wrong error variant {:?} instead of InvalidNumOfDaughters",
+            err
+        );
+    }
+}
+
+#[test]
+fn test_invalid_daughterid() {
+    // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        =2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025     1.01752300e+00  # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        decays: HashMap<i64, DecayTable>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::InvalidDaughterId(..) = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of InvalidDaughterId", err);
+    }
+}
+
+#[test]
+fn test_missing_daughter() {
+    // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004           # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025     1.01752300e+00  # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        decays: HashMap<i64, DecayTable>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::NotEnoughDaughters(n) = err {
+        assert_eq!(n, 1);
+    } else {
+        panic!(
+            "Wrong error variant {:?} instead of NotEnoughDaughters",
+            err
+        );
+    }
+}
+
+#[test]
+fn test_too_many_daughters() {
+    // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4 9 # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025     1.01752300e+00  # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        decays: HashMap<i64, DecayTable>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let ParseError::TooManyDaughters = err {
+    } else {
+        panic!("Wrong error variant {:?} instead of TooManyDaughters", err);
+    }
+}

@@ -119,7 +119,10 @@ fn insert_decay(has_decays: bool) -> quote::Tokens {
     if has_decays {
         quote! {
             slha::Segment::Decay { pdg_id, width, decays } => {
-                decay_tables.insert(pdg_id, slha::DecayTable { width, decays });
+                let duplicate = decay_tables.insert(pdg_id, slha::DecayTable { width, decays });
+                if duplicate.is_some() {
+                    return Err(slha::ParseError::DuplicateDecay(pdg_id));
+                }
             },
         }
     } else {
