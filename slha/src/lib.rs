@@ -381,6 +381,21 @@ impl<'a> BlockScale<'a> {
         };
         B::parse(lines, scale).chain_err(|| ErrorKind::InvalidBlock(name))
     }
+
+    fn to_blocks<B>(&self, name: String) -> Result<Vec<B>>
+    where
+        B: SlhaBlock<Error>,
+    {
+        let blocks = match *self {
+            BlockScale::WithoutScale(ref lines) => B::parse(lines, None).map(|b| vec![b]),
+            BlockScale::WithScale(ref vec) => {
+                vec.iter()
+                    .map(|&(scale, ref lines)| B::parse(lines, Some(scale)))
+                    .collect()
+            }
+        };
+        blocks.chain_err(|| ErrorKind::InvalidBlock(name))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -432,6 +447,16 @@ impl<'a> Slha<'a> {
             None => return None,
         };
         Some(block.to_block(name))
+    }
+
+    /// Lookup a block.
+    pub fn get_blocks<B: SlhaBlock<Error>>(&self, name: &str) -> Result<Vec<B>> {
+        let name = name.to_lowercase();
+        let block = match self.blocks.get(&name) {
+            Some(lines) => lines,
+            None => return Ok(Vec::new()),
+        };
+        block.to_blocks(name)
     }
 
     pub fn get_decay(&self, pdg_id: i64) -> Option<&DecayTable> {
@@ -996,6 +1021,47 @@ BLOCK TEST # A blkoc of type test
         println!("{:?}", slha);
         let block: BlockSingle<i64> = slha.get_block("test").unwrap().unwrap();
         assert_eq!(block.value, 3);
+    }
+
+    #[test]
+    fn test_parse_blocks() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yx
+    2  1.9e-01
+    3  1.4e-01
+Block yd Q= 50
+    3  5.3
+Block ye Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block yu Q= 4.64649125e+02
+    3  3 8.88194465e-01   # Yt(Q)MSSM DRbar
+Block ye Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let slha = Slha::parse(input).unwrap();
+        let yx: Vec<Block<i8, f64>> = slha.get_blocks("yx").unwrap();
+        assert_eq!(yx.len(), 1);
+        assert_eq!(yx[0].map.len(), 2);
+        assert_eq!(yx[0].map[&2], 1.9e-01);
+        assert_eq!(yx[0].map[&3], 1.4e-01);
+        let yd: Vec<Block<i8, f64>> = slha.get_blocks("yd").unwrap();
+        assert_eq!(yd.len(), 1);
+        assert_eq!(yd[0].map.len(), 1);
+        assert_eq!(yd[0].map[&3], 5.3);
+        let yu: Vec<Block<(i8, i8), f64>> = slha.get_blocks("yu").unwrap();
+        assert_eq!(yu.len(), 1);
+        assert_eq!(yu[0].map.len(), 1);
+        assert_eq!(yu[0].map[&(3, 3)], 8.88194465e-01);
+        let ye: Vec<Block<(i8, i8), f64>> = slha.get_blocks("ye").unwrap();
+        assert_eq!(ye.len(), 2);
+        assert_eq!(ye[0].map.len(), 1);
+        assert_eq!(ye[0].map[&(3, 3)], 9.97405356e-02);
+        assert_eq!(ye[1].map.len(), 1);
+        assert_eq!(ye[1].map[&(3, 3)], 9.97405356e-03);
+        let foo: Vec<Block<(i8, i8), f64>> = slha.get_blocks("foo").unwrap();
+        assert_eq!(foo.len(), 0);
     }
 
     #[test]
@@ -2316,10 +2382,114 @@ BLOCK Foo
     fn test_parse_block_single_invalid() {
         let input = "\
 BLOCK TEST
-   59  ";
+   59.7  ";
         let slha = Slha::parse(input).unwrap();
         println!("{:?}", slha);
         let block: Result<BlockSingle<i64>, Error> = slha.get_block("test").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(name, "test");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_parse_blocks_invalid_key() {
+        let input = "\
+BLOCK TEST
+ 1 3
+ 4 6
+block foobar Q= 1
+  6  173.2
+block Mass Q= 3
+  6  173.2
+BloCk FooBar Q = 8
+  1 2 0.5
+  1 assdf 8
+  1 2 8.98
+";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let block: Result<Vec<Block<(i8, i8), f64>>, Error> = slha.get_blocks("foobar");
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(name, "foobar");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_parse_blocks_incomplete_parse() {
+        let input = "\
+BLOCK TEST
+ 1 3
+ 4 6
+block foobar Q= 1
+  6  173.2
+block Mass Q= 3
+  6  7 173.2
+BloCk FooBar Q = 8
+  1 2 0.5
+  1 97 8
+  1 2 8.98
+";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let block: Result<Vec<Block<i8, f64>>, Error> = slha.get_blocks("mass");
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(name, "mass");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_parse_blocks_short_key() {
+        let input = "\
+BLOCK TEST
+ 1 3
+ 4 6
+block foobar Q= 1
+  6  173.2
+block Mass Q= 3
+  6  173.2
+BloCk FooBar Q = 8
+  1 2 0.5
+  1
+  1 2 8.98
+";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let block: Result<Vec<Block<(i8, i8), f64>>, Error> = slha.get_blocks("foobar");
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(name, "foobar");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_parse_blocks_incompatible_blocks() {
+        let input = "\
+BLOCK TEST Q= 32
+ 1 3
+ 4 6
+block foobar Q= 1
+  6 9.2
+block Mass Q= 3
+  6  173.2
+BloCk Test Q = 8
+  1 2 0.5
+  1 21 0.23
+  1 2 8.98
+";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let block: Result<Vec<Block<i8, i8>>, Error> = slha.get_blocks("test");
         let err = block.unwrap_err();
         if let Error(ErrorKind::InvalidBlock(name), _) = err {
             assert_eq!(name, "test");
