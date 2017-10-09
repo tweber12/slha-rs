@@ -284,6 +284,43 @@ where
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct BlockStr<Value> {
+    scale: Option<f64>,
+    map: HashMap<Vec<String>, Value>,
+}
+impl<Value> SlhaBlock<Error> for BlockStr<Value>
+where
+    Value: Parseable,
+{
+    fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self> {
+        let map: Result<HashMap<Vec<String>, Value>> = lines
+            .iter()
+            .map(|line| parse_line_block_str(line.data))
+            .collect();
+        Ok(BlockStr { scale, map: map? })
+    }
+}
+
+fn parse_line_block_str<'input, Value>(line: &'input str) -> Result<(Vec<String>, Value)>
+where
+    Value: Parseable,
+{
+    let mut val = Value::parse(line).end();
+    let mut keys = Vec::new();
+    let mut rest = line;
+    while let Err(_) = val {
+        if let Some((key, line)) = next_word(rest) {
+            keys.push(key.to_string());
+            val = Value::parse(line).end();
+            rest = line;
+        } else {
+            return Err(ErrorKind::InvalidBlockValue.into());
+        }
+    }
+    Ok((keys, val.expect("BUG: This should be impossible.")))
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct BlockSingle<Value> {
     pub value: Value,
     pub scale: Option<f64>,
@@ -665,7 +702,7 @@ fn split_comment(line: &str) -> (&str, Option<&str>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Slha, Block, BlockSingle, Parseable, ParseResult, Decay};
+    use super::{Slha, Block, BlockSingle, BlockStr, Parseable, ParseResult, Decay};
     use super::next_word;
     use super::errors::{Error, ErrorKind};
 
@@ -882,6 +919,54 @@ DECAY   6    1.3   # top quark decays
                 branching_ratio: 0.25,
                 daughters: vec![5, 6, 7, 8],
             }
+        );
+    }
+
+    #[test]
+    fn test_parse_block_str() {
+        let input = "\
+BLOCK TEST
+ 1 3
+ 4 6
+block Mass
+  6  173.2
+BloCk FooBar
+  1 2 3 4 0.5
+  1 assdf 3 4 8
+  1 2 4 8.98
+";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let block: BlockStr<i64> = slha.get_block("test").unwrap().unwrap();
+        assert_eq!(block.map.len(), 2);
+        assert_eq!(block.map[&vec!["1".to_string()]], 3);
+        assert_eq!(block.map[&vec!["4".to_string()]], 6);
+        let block: BlockStr<(i64, f64)> = slha.get_block("mass").unwrap().unwrap();
+        assert_eq!(block.map.len(), 1);
+        assert_eq!(block.map[&Vec::new()], (6, 173.2));
+        let block: BlockStr<f64> = slha.get_block("foobar").unwrap().unwrap();
+        assert_eq!(block.map.len(), 3);
+        assert_eq!(
+            block.map[&vec![
+                "1".to_string(),
+                "2".to_string(),
+                "3".to_string(),
+                "4".to_string(),
+            ]],
+            0.5
+        );
+        assert_eq!(
+            block.map[&vec![
+                "1".to_string(),
+                "assdf".to_string(),
+                "3".to_string(),
+                "4".to_string(),
+            ]],
+            8.
+        );
+        assert_eq!(
+            block.map[&vec!["1".to_string(), "2".to_string(), "4".to_string()]],
+            8.98
         );
     }
 
@@ -2098,6 +2183,69 @@ DECAY   1000020    1.01752300e+00   # gluino decays
             assert_eq!(pdg_id, 1000022);
         } else {
             panic!("Wrong error variant {:?} instead of InvalidDecay", err);
+        }
+    }
+
+    #[test]
+    fn test_parse_block_str_invalid_float() {
+        let input = "\
+BLOCK TEST
+ 1 3
+ 4 6
+block Mass
+  6  173.2
+BloCk FooBar
+  1 2 3 4 0x5
+  1 assdf 3 4 8
+  1 2 4 8.98
+";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let block: BlockStr<i64> = slha.get_block("test").unwrap().unwrap();
+        assert_eq!(block.map.len(), 2);
+        assert_eq!(block.map[&vec!["1".to_string()]], 3);
+        assert_eq!(block.map[&vec!["4".to_string()]], 6);
+        let block: BlockStr<(i64, f64)> = slha.get_block("mass").unwrap().unwrap();
+        assert_eq!(block.map.len(), 1);
+        assert_eq!(block.map[&Vec::new()], (6, 173.2));
+        let block: Result<BlockStr<f64>, Error> = slha.get_block("foobar").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(name, "foobar");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_parse_block_str_eol() {
+        let input = "\
+BLOCK TEST
+ 1 3
+ 4 6
+block Mass
+  6  173.2
+BloCk FooBar
+  1 2 3 4 0.5
+  1 9 3 4 8
+  1 2 4 8
+";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let block: BlockStr<i64> = slha.get_block("test").unwrap().unwrap();
+        assert_eq!(block.map.len(), 2);
+        assert_eq!(block.map[&vec!["1".to_string()]], 3);
+        assert_eq!(block.map[&vec!["4".to_string()]], 6);
+        let block: BlockStr<(i64, f64)> = slha.get_block("mass").unwrap().unwrap();
+        assert_eq!(block.map.len(), 1);
+        assert_eq!(block.map[&Vec::new()], (6, 173.2));
+        let block: Result<BlockStr<(i8, i8, i8, i8, f64)>, Error> = slha.get_block("foobar")
+            .unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(name, "foobar");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
         }
     }
 }
