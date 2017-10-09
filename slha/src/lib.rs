@@ -971,6 +971,34 @@ BloCk FooBar
     }
 
     #[test]
+    fn test_parse_block_single() {
+        let input = "\
+BLOCK TEST
+   3
+  ";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let block: BlockSingle<i64> = slha.get_block("test").unwrap().unwrap();
+        assert_eq!(block.value, 3);
+    }
+
+    #[test]
+    fn test_parse_block_single_comments() {
+        let input = "\
+# This is a test
+BLOCK TEST # A blkoc of type test
+# Single blocks only contain one line wiht one isngle value on it
+   3  # The value of this single block
+# That was it. No more stuff
+# is allowed in this block
+  ";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let block: BlockSingle<i64> = slha.get_block("test").unwrap().unwrap();
+        assert_eq!(block.value, 3);
+    }
+
+    #[test]
     fn test_example_1() {
         // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
         let input = "\
@@ -2244,6 +2272,57 @@ BloCk FooBar
         let err = block.unwrap_err();
         if let Error(ErrorKind::InvalidBlock(name), _) = err {
             assert_eq!(name, "foobar");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_parse_block_single_map() {
+        let input = "\
+BLOCK TEST
+   3  9
+  ";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let block: Result<BlockSingle<i64>, Error> = slha.get_block("test").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(name, "test");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_parse_block_single_empty() {
+        let input = "\
+BLOCK TEST
+BLOCK Foo
+   4 9
+  ";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let block: Result<BlockSingle<i64>, Error> = slha.get_block("test").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(name, "test");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_parse_block_single_invalid() {
+        let input = "\
+BLOCK TEST
+   59  ";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let block: Result<BlockSingle<i64>, Error> = slha.get_block("test").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(name, "test");
         } else {
             panic!("Wrong error variant {:?} instead of InvalidBlock", err);
         }

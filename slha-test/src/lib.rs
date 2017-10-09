@@ -5,7 +5,7 @@ extern crate slha;
 extern crate slha_derive;
 
 use std::collections::HashMap;
-use slha::{Block, SlhaDeserialize, DecayTable, Decay};
+use slha::{Block, SlhaDeserialize, DecayTable, Decay, BlockSingle};
 use slha::errors::{Error, ErrorKind};
 
 #[test]
@@ -287,6 +287,43 @@ Block ye Q= 4.64649125e+03
     assert_eq!(ye.len(), 2);
     assert_eq!(ye[0].map[&(3, 3)], 9.97405356e-02);
     assert_eq!(ye[1].map[&(3, 3)], 9.97405356e-03);
+}
+
+#[test]
+fn test_single_derive() {
+    let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88194465e-01   # Yt(Q)MSSM DRbar
+Block yd Q= 40
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.6e-01
+Block ye Q= 4.64649125e+02
+    9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block ye Q= 4.64649125e+03
+    9.98405356e-03   # Ytau(Q)MSSM DRbar
+";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        yu: Vec<Block<(i8, i8), f64>>,
+        yd: Vec<Block<(i8, i8), f64>>,
+        ye: Vec<BlockSingle<f64>>,
+    }
+
+    let slha = MySlha::deserialize(input).unwrap();
+    println!("{:?}", slha);
+    let yu = &slha.yu;
+    assert_eq!(yu.len(), 1);
+    assert_eq!(yu[0].map[&(3, 3)], 8.88194465e-01);
+    let yd = &slha.yd;
+    assert_eq!(yd.len(), 2);
+    assert_eq!(yd[0].map[&(3, 3)], 1.4e-01);
+    assert_eq!(yd[1].map[&(3, 3)], 1.6e-01);
+    let ye = &slha.ye;
+    assert_eq!(ye.len(), 2);
+    assert_eq!(ye[0].value, 9.97405356e-02);
+    assert_eq!(ye[1].value, 9.98405356e-03);
 }
 
 #[test]
@@ -1342,5 +1379,59 @@ DECAY   1000020    1.01752300e+00   # gluino decays
         assert_eq!(pdg_id, 1000022);
     } else {
         panic!("Wrong error variant {:?} instead of InvalidDecay", err);
+    }
+}
+
+#[test]
+fn test_parse_block_single_map() {
+    let input = "\
+BLOCK TEST
+    3  9
+";
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        test: BlockSingle<i64>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let Error(ErrorKind::InvalidBlock(name), _) = err {
+        assert_eq!(name, "test");
+    } else {
+        panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+    }
+}
+
+#[test]
+fn test_parse_block_single_empty() {
+    let input = "\
+BLOCK TEST
+BLOCK Foo
+    4 9
+";
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        test: BlockSingle<i64>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let Error(ErrorKind::InvalidBlock(name), _) = err {
+        assert_eq!(name, "test");
+    } else {
+        panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+    }
+}
+
+#[test]
+fn test_parse_block_single_invalid() {
+    let input = "\
+BLOCK TEST
+    59.7  ";
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        test: BlockSingle<i64>,
+    }
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let Error(ErrorKind::InvalidBlock(name), _) = err {
+        assert_eq!(name, "test");
+    } else {
+        panic!("Wrong error variant {:?} instead of InvalidBlock", err);
     }
 }
