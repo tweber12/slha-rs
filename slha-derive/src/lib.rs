@@ -32,7 +32,8 @@ fn impl_slha_deserialize(ast: &syn::DeriveInput) -> quote::Tokens {
     let validate = validate_vecs(&fields);
     quote! {
         impl slha::SlhaDeserialize for #name {
-            fn deserialize(input: &str) -> Result<#name, slha::ParseError> {
+            fn deserialize(input: &str) -> slha::errors::Result<#name> {
+                use slha::errors::ResultExt;
                 #(#vars)*
                 let mut lines = input.lines().peekable();
                 while let Some(segment) = slha::parse_segment(&mut lines) {
@@ -121,7 +122,7 @@ fn insert_decay(has_decays: bool) -> quote::Tokens {
             slha::Segment::Decay { pdg_id, width, decays } => {
                 let duplicate = decay_tables.insert(pdg_id, slha::DecayTable { width, decays });
                 if duplicate.is_some() {
-                    return Err(slha::ParseError::DuplicateDecay(pdg_id));
+                    return Err(slha::errors::ErrorKind::DuplicateDecay(pdg_id).into());
                 }
             },
         }
@@ -142,16 +143,16 @@ fn validate_vecs(fields: &[Field]) -> Vec<quote::Tokens> {
             for block in &#name {
                 if let Some(scale) = block.scale {
                     if no_scale {
-                        return Err(slha::ParseError::RedefinedBlockWithQ(#name_str.to_string()));
+                        return Err(slha::errors::ErrorKind::RedefinedBlockWithQ(#name_str.to_string()).into());
                     }
                     if seen.contains(&scale) {
-                        return Err(slha::ParseError::DuplicateBlockScale(#name_str.to_string(), scale));
+                        return Err(slha::errors::ErrorKind::DuplicateBlockScale(#name_str.to_string(), scale).into());
                     }
                     seen.push(scale);
                 } else {
                     no_scale = true;
                     if !seen.is_empty() {
-                        return Err(slha::ParseError::RedefinedBlockWithQ(#name_str.to_string()));
+                        return Err(slha::errors::ErrorKind::RedefinedBlockWithQ(#name_str.to_string()).into());
                     }
                 }
             }
@@ -169,7 +170,12 @@ fn struct_assign(fields: &[Field]) -> Vec<quote::Tokens> {
                 FieldMode::Vector | FieldMode::Optional => quote! { #name, },
                 FieldMode::Decays => quote! { decays: decay_tables, },
                 FieldMode::Normal => {
-                    quote! { #name: #name.ok_or_else(|| { slha::ParseError::MissingBlock(#name_str.to_string()) })?, }
+                    quote! {
+                        #name: match #name {
+                            Some(v) => v,
+                            None => return Err(slha::errors::ErrorKind::MissingBlock(#name_str.to_string()).into()),
+                        },
+                    }
                 }
             }
         })
@@ -205,16 +211,16 @@ fn match_arms(fields: &[Field]) -> Vec<quote::Tokens> {
                 FieldMode::Vector => {
                     quote! {
                     #match_str => {
-                        #name.push(slha::parse_block_from(&block, scale)?)
+                        #name.push(slha::parse_block_from(&block, scale).chain_err(|| slha::errors::ErrorKind::InvalidBlock(#match_str.to_string()))?)
                     }
                 }
                 }
                 FieldMode::Normal | FieldMode::Optional => {
                     quote! {
                     #match_str => { #name = if #name.is_some() {
-                        return Err(slha::ParseError::DuplicateBlock(name))
+                        return Err(slha::errors::ErrorKind::DuplicateBlock(name).into())
                     } else {
-                        Some(slha::parse_block_from(&block, scale)?)
+                        Some(slha::parse_block_from(&block, scale).chain_err(|| slha::errors::ErrorKind::InvalidBlock(#match_str.to_string()))?)
                     }},
                 }
                 }

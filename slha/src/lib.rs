@@ -1,11 +1,133 @@
+#![recursion_limit="128"]
+
+#[macro_use]
+extern crate error_chain;
+
+use std::result;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::iter;
-use std::num::{ParseFloatError, ParseIntError};
 use std::str;
 
+pub mod errors {
+    use std::num::{ParseFloatError, ParseIntError};
+
+    error_chain!{
+        errors {
+            InvalidSegment(n: usize) {
+                description("Failed to parse a segment")
+                display("Failed to parse the {}th segment", n)
+            }
+            MissingBlockName {
+                description("Missing block name")
+            }
+            InvalidBlock(name: String) {
+                description("Malformed block")
+                display("Malformed block: '{}'", name)
+            }
+            InvalidBlockSingle(name: String) {
+                description("Malformed block single")
+                display("Malformed block single: '{}'", name)
+            }
+            InvalidDecayingPdgId {
+                description("Failed to parse the pdg id of the decaying particle")
+            }
+            InvalidDecay(pdg_id: i64) {
+                description("Invalid decay table")
+                display("Invalid decay table for particle {}", pdg_id)
+            }
+            IncompleteParse(rest: String) {
+                description("The parser did not consume the whole line")
+                display("The parser did not consume the whole line, '{}' was left over", rest)
+            }
+            UnexpectedEol {
+                description("The parser reached the end of the line before finishing")
+            }
+            InvalidInt(err: ParseIntError) {
+                description("Failed to parse an integer")
+                display("Failed to parse an integer: {}", err)
+            }
+            InvalidFloat(err: ParseFloatError) {
+                description("Failed to parse a floating point number")
+                display("Failed to parse a floating point number: {}", err)
+            }
+            UnknownSegment(segment: String) {
+                description("Unknown top level segment encountered")
+                display("Unknown top level segment encountered: '{}'", segment)
+            }
+            UnexpectedIdent(line: String) {
+                description("Expected the beginning of a segment, found an indented line instead")
+                display("Expected the beginning of a segment, found an indented line instead: '{}'", line)
+            }
+            MalformedBlockHeader(rest: String) {
+                description("Encountered trailing non-whitespace characters after block header")
+                display("Encountered trailing non-whitespace characters after block header: '{}'", rest)
+            }
+            InvalidBlockLine(n: usize) {
+                description("Failed to parse a line in the body")
+                display("Failed to parse the {}th data line in the body", n)
+            }
+            InvalidBlockKey {
+                description("Failed to parse the key of a block")
+            }
+            InvalidBlockValue {
+                description("Failed to parse the value of a block")
+            }
+            DuplicateBlock(name: String) {
+                description("Found a duplicate block")
+                display("Found a duplicate block: '{}'", name)
+            }
+            DuplicateBlockScale(name: String, scale: f64) {
+                description("Found a duplicate block with equal scale")
+                display("Found a duplicate block with name '{}' and scale '{}'", name, scale)
+            }
+            RedefinedBlockWithQ(name: String) {
+                description("Found a duplicate block with and without scale")
+                display("Found a duplicate block with and without scale: '{}'", name)
+            }
+            InvalidScale {
+                description("Failed to parse the scale")
+            }
+            DuplicateDecay(pdg_id: i64) {
+                description("Found multiple decay tables for the same particle")
+                display("Found multiple decay tables for the same particle: '{}'", pdg_id)
+            }
+            InvalidDecayLine(n: usize) {
+                description("Failed to parse a line in the body")
+                display("Failed to parse the {}th data line in the body", n)
+            }
+            InvalidWidth {
+                description("Failed to parse the width")
+            }
+            InvalidBranchingRatio {
+                description("Failed to parse the branching ratio")
+            }
+            InvalidNumOfDaughters {
+                description("Failed to parse the number of daughter particles")
+            }
+            NotEnoughDaughters(expected: u8, found: u8) {
+                description("Did not find enough daughter particles")
+                display("Did not find enough daughter particles, expected {} but found {}", expected, found)
+            }
+            InvalidDaughterId {
+                description("Failed to parse the pdg id of a daughter particle")
+            }
+            WrongNumberOfValues(n: usize) {
+                description("Found too many values in a single valued block")
+                display("Found {} values in a single valued block", n)
+            }
+            MissingBlock(name: String) {
+                description("A block is missing")
+                display("Did not find the block with name '{}'", name)
+            }
+        }
+    }
+}
+
+use errors::*;
+
 pub trait SlhaDeserialize: Sized {
-    fn deserialize(&str) -> Result<Self, ParseError>;
+    fn deserialize(&str) -> Result<Self>;
 }
 
 /// A trait for blocks that can be read from an SLHA file.
@@ -14,51 +136,32 @@ pub trait SlhaBlock<E>: Sized {
     ///
     /// The argument of the `parse` function are all lines that belong
     /// to the block.
-    fn parse<'a>(&[Line<'a>], scale: Option<f64>) -> Result<Self, E>;
+    fn parse<'a>(&[Line<'a>], scale: Option<f64>) -> result::Result<Self, E>;
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub enum ParseResult<'input, T> {
     Done(&'input str, T),
-    Error(ParseError),
+    Error(Error),
 }
 impl<'input, T> ParseResult<'input, T> {
-    fn end(self) -> Result<T, ParseError> {
+    fn end(self) -> Result<T> {
         match self {
             ParseResult::Error(e) => Err(e),
             ParseResult::Done(input, _) if !input.trim().is_empty() => Err(
-                ParseError::IncompleteParse(input.to_string()),
+                ErrorKind::IncompleteParse(
+                    input.to_string(),
+                ).into(),
             ),
             ParseResult::Done(_, value) => Ok(value),
         }
     }
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum ParseError {
-    IncompleteParse(String),
-    UnexpectedEol,
-    InvalidInt(ParseIntError),
-    InvalidFloat(ParseFloatError),
-    UnknownSegment(String),
-    UnexpectedIdent(String),
-    MissingBlockName,
-    MalformedBlockHeader(String),
-    DuplicateBlock(String),
-    DuplicateBlockScale(String, f64),
-    RedefinedBlockWithQ(String),
-    InvalidScale(ParseFloatError),
-    DuplicateDecay(i64),
-    MissingDecayingParticle,
-    InvalidPdgId(ParseIntError),
-    InvalidWidth(ParseFloatError),
-    InvalidBranchingRatio(Box<ParseError>),
-    InvalidNumOfDaughters(Box<ParseError>),
-    NotEnoughDaughters(u8),
-    TooManyDaughters,
-    InvalidDaughterId(Box<ParseError>),
-    WrongNumberOfValues(usize),
-    MissingBlock(String),
+    fn to_result(self) -> Result<(&'input str, T)> {
+        match self {
+            ParseResult::Done(rest, value) => Ok((rest, value)),
+            ParseResult::Error(err) => Err(err),
+        }
+    }
 }
 
 pub trait Parseable: Sized {
@@ -69,7 +172,7 @@ impl Parseable for String {
     fn parse<'input>(input: &'input str) -> ParseResult<'input, String> {
         let input = input.trim();
         if input.is_empty() {
-            return ParseResult::Error(ParseError::UnexpectedEol);
+            return ParseResult::Error(ErrorKind::UnexpectedEol.into());
         }
         ParseResult::Done("", input.to_string())
     }
@@ -81,11 +184,11 @@ macro_rules! impl_parseable {
             fn parse<'input>(input: &'input str) -> ParseResult<'input, $int> {
                 let (word, rest) = match next_word(input) {
                     Some(a) => a,
-                    None => return ParseResult::Error(ParseError::UnexpectedEol),
+                    None => return ParseResult::Error(ErrorKind::UnexpectedEol.into()),
                 };
                 let value: $int = match word.parse() {
                     Ok(value) => value,
-                    Err(err) => return ParseResult::Error(ParseError::$err(err)),
+                    Err(err) => return ParseResult::Error(ErrorKind::$err(err).into()),
                 };
                 ParseResult::Done(rest, value)
             }
@@ -145,42 +248,43 @@ where
     pub scale: Option<f64>,
     pub map: HashMap<Key, Value>,
 }
-impl<Key, Value> SlhaBlock<ParseError> for Block<Key, Value>
+impl<Key, Value> SlhaBlock<Error> for Block<Key, Value>
 where
     Key: Hash + Eq + Parseable,
     Value: Parseable,
 {
-    fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self, ParseError> {
-        let map: Result<HashMap<Key, Value>, ParseError> = lines
+    fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self> {
+        let map: Result<HashMap<Key, Value>> = lines
             .iter()
-            .map(|line| parse_line_block(line.data).end())
+            .enumerate()
+            .map(|(n, line)| {
+                parse_line_block(line.data).chain_err(|| ErrorKind::InvalidBlockLine(n + 1))
+            })
             .collect();
         Ok(Block { map: map?, scale })
     }
 }
 
-pub fn parse_block_from<'a, B: SlhaBlock<ParseError>>(
+pub fn parse_block_from<'a, B: SlhaBlock<Error>>(
     input: &[Line<'a>],
     scale: Option<f64>,
-) -> Result<B, ParseError> {
+) -> Result<B> {
     B::parse(input, scale)
 }
 
-fn parse_line_block<'input, K, V>(input: &'input str) -> ParseResult<'input, (K, V)>
+fn parse_line_block<'input, K, V>(input: &'input str) -> Result<(K, V)>
 where
     K: Parseable,
     V: Parseable,
 {
     let input = input.trim_left();
-    let (input, key) = match K::parse(input) {
-        ParseResult::Done(input, key) => (input.trim_left(), key),
-        ParseResult::Error(e) => return ParseResult::Error(e),
-    };
-    let (input, value) = match V::parse(input) {
-        ParseResult::Done(input, key) => (input.trim_left(), key),
-        ParseResult::Error(e) => return ParseResult::Error(e),
-    };
-    ParseResult::Done(input, (key, value))
+    let (input, key) = K::parse(input).to_result().chain_err(
+        || ErrorKind::InvalidBlockKey,
+    )?;
+    let value = V::parse(input).end().chain_err(
+        || ErrorKind::InvalidBlockValue,
+    )?;
+    Ok((key, value))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -188,13 +292,13 @@ pub struct BlockSingle<Value> {
     pub value: Value,
     pub scale: Option<f64>,
 }
-impl<Value> SlhaBlock<ParseError> for BlockSingle<Value>
+impl<Value> SlhaBlock<Error> for BlockSingle<Value>
 where
     Value: Parseable,
 {
-    fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self, ParseError> {
+    fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self> {
         if lines.len() != 1 {
-            return Err(ParseError::WrongNumberOfValues(lines.len()));
+            bail!(ErrorKind::WrongNumberOfValues(lines.len()));
         }
         let value = Value::parse(lines[0].data).end()?;
         Ok(BlockSingle { value, scale })
@@ -228,7 +332,7 @@ enum BlockScale<'a> {
     WithoutScale(Vec<Line<'a>>),
 }
 impl<'a> BlockScale<'a> {
-    fn to_block<B, E>(&self) -> Result<B, E>
+    fn to_block<B, E>(&self) -> result::Result<B, E>
     where
         B: SlhaBlock<E>,
     {
@@ -264,14 +368,18 @@ pub struct Slha<'a> {
 }
 impl<'a> Slha<'a> {
     /// Create a new Slha object from raw data.
-    pub fn parse(input: &'a str) -> Result<Slha<'a>, ParseError> {
+    pub fn parse(input: &'a str) -> Result<Slha<'a>> {
         let mut slha = Slha {
             blocks: HashMap::new(),
             decays: HashMap::new(),
         };
         let mut lines = input.lines().peekable();
+        let mut n_segments = 0;
         while let Some(segment) = parse_segment(&mut lines) {
-            match segment? {
+            let segment = segment.chain_err(
+                || ErrorKind::InvalidSegment(n_segments + 1),
+            )?;
+            match segment {
                 Segment::Block { name, block, scale } => slha.insert_block(name, block, scale)?,
                 Segment::Decay {
                     pdg_id,
@@ -279,12 +387,13 @@ impl<'a> Slha<'a> {
                     decays,
                 } => slha.insert_decay(pdg_id, width, decays)?,
             }
+            n_segments += 1;
         }
         Ok(slha)
     }
 
     /// Lookup a block.
-    pub fn get_block<B: SlhaBlock<E>, E>(&self, name: &str) -> Option<Result<B, E>> {
+    pub fn get_block<B: SlhaBlock<E>, E>(&self, name: &str) -> Option<result::Result<B, E>> {
         let name = name.to_lowercase();
         let block = match self.blocks.get(&name) {
             Some(lines) => lines,
@@ -302,7 +411,7 @@ impl<'a> Slha<'a> {
         name: String,
         block: Vec<Line<'a>>,
         scale: Option<f64>,
-    ) -> Result<(), ParseError> {
+    ) -> Result<()> {
         if let Some(scale) = scale {
             self.insert_block_scale(name, block, scale)
         } else {
@@ -310,42 +419,28 @@ impl<'a> Slha<'a> {
         }
     }
 
-    fn insert_block_noscale(
-        &mut self,
-        name: String,
-        block: Vec<Line<'a>>,
-    ) -> Result<(), ParseError> {
+    fn insert_block_noscale(&mut self, name: String, block: Vec<Line<'a>>) -> Result<()> {
         if self.blocks.contains_key(&name) {
-            return Err(ParseError::DuplicateBlock(name));
+            bail!(ErrorKind::DuplicateBlock(name));
         }
         self.blocks.insert(name, BlockScale::WithoutScale(block));
         Ok(())
     }
 
-    fn insert_block_scale(
-        &mut self,
-        name: String,
-        block: Vec<Line<'a>>,
-        scale: f64,
-    ) -> Result<(), ParseError> {
+    fn insert_block_scale(&mut self, name: String, block: Vec<Line<'a>>, scale: f64) -> Result<()> {
         let entry = self.blocks.entry(name.clone()).or_insert_with(|| {
             BlockScale::WithScale(Vec::new())
         });
         match *entry {
-            BlockScale::WithoutScale(_) => return Err(ParseError::RedefinedBlockWithQ(name)),
+            BlockScale::WithoutScale(_) => bail!(ErrorKind::RedefinedBlockWithQ(name)),
             BlockScale::WithScale(ref mut blocks) => blocks.push((scale, block)),
         };
         Ok(())
     }
 
-    fn insert_decay(
-        &mut self,
-        pdg_id: i64,
-        width: f64,
-        decays: Vec<Decay>,
-    ) -> Result<(), ParseError> {
+    fn insert_decay(&mut self, pdg_id: i64, width: f64, decays: Vec<Decay>) -> Result<()> {
         if self.decays.contains_key(&pdg_id) {
-            return Err(ParseError::DuplicateDecay(pdg_id));
+            bail!(ErrorKind::DuplicateDecay(pdg_id));
         }
         self.decays.insert(pdg_id, DecayTable { width, decays });
         Ok(())
@@ -354,29 +449,34 @@ impl<'a> Slha<'a> {
 
 pub fn parse_segment<'a>(
     input: &mut iter::Peekable<str::Lines<'a>>,
-) -> Option<Result<Segment<'a>, ParseError>> {
+) -> Option<Result<Segment<'a>>> {
     skip_empty_lines(input);
-    let line = match input.next() {
-        Some(line) => line,
-        None => return None,
-    };
+    match input.next() {
+        Some(line) => Some(parse_segment_line(line, input)),
+        None => None,
+    }
+}
+
+fn parse_segment_line<'a>(
+    line: &'a str,
+    input: &mut iter::Peekable<str::Lines<'a>>,
+) -> Result<Segment<'a>> {
     if line.starts_with(|c: char| c.is_whitespace()) {
-        return Some(Err(ParseError::UnexpectedIdent(line.to_string())));
+        bail!(ErrorKind::UnexpectedIdent(line.to_string()));
     }
     match next_word(line) {
-        Some((kw, rest)) => Some(match kw.to_lowercase().as_ref() {
-            "block" => parse_block(rest, input),
-            "decay" => parse_decay_table(rest, input),
-            kw => Err(ParseError::UnknownSegment(kw.to_string())),
-        }),
+        Some((kw, rest)) => {
+            match kw.to_lowercase().as_ref() {
+                "block" => parse_block(rest, input),
+                "decay" => parse_decay_table(rest, input),
+                kw => bail!(ErrorKind::UnknownSegment(kw.to_string())),
+            }
+        }
         None => unreachable!("All empty lines have been skipped, so this line MUST NOT be empty."),
     }
 }
 
-fn parse_block<'a, Iter>(
-    header: &str,
-    input: &mut iter::Peekable<Iter>,
-) -> Result<Segment<'a>, ParseError>
+fn parse_block<'a, Iter>(header: &str, input: &mut iter::Peekable<Iter>) -> Result<Segment<'a>>
 where
     Iter: Iterator<Item = &'a str>,
 {
@@ -400,17 +500,19 @@ where
     Ok(Segment::Block { name, block, scale })
 }
 
-fn parse_block_header(header: &str) -> Result<(String, Option<f64>), ParseError> {
+fn parse_block_header(header: &str) -> Result<(String, Option<f64>)> {
     let (data, _) = split_comment(header);
     let (name, rest) = match next_word(data) {
-        None => return Err(ParseError::MissingBlockName),
+        None => bail!(ErrorKind::MissingBlockName),
         Some((name, rest)) => (name.to_lowercase(), rest),
     };
-    let scale = parse_block_scale(rest)?;
+    let scale = parse_block_scale(rest).chain_err(|| {
+        ErrorKind::InvalidBlock(name.clone())
+    })?;
     Ok((name, scale))
 }
 
-fn parse_block_scale(header: &str) -> Result<Option<f64>, ParseError> {
+fn parse_block_scale(header: &str) -> Result<Option<f64>> {
     let (word, rest) = match next_word(header) {
         None => return Ok(None),
         Some(a) => a,
@@ -421,21 +523,21 @@ fn parse_block_scale(header: &str) -> Result<Option<f64>, ParseError> {
         "q" => {
             match next_word(rest) {
                 Some(("=", rest)) => rest,
-                _ => return Err(ParseError::MalformedBlockHeader(header.to_string())),
+                _ => bail!(ErrorKind::MalformedBlockHeader(header.to_string())),
             }
         }
-        _ => return Err(ParseError::MalformedBlockHeader(header.to_string())),
+        _ => bail!(ErrorKind::MalformedBlockHeader(header.to_string())),
     };
-    match str::parse(rest.trim()) {
-        Ok(scale) => Ok(Some(scale)),
-        Err(e) => Err(ParseError::InvalidScale(e)),
-    }
+    f64::parse(rest.trim())
+        .end()
+        .chain_err(|| ErrorKind::InvalidScale)
+        .map(Some)
 }
 
 fn parse_decay_table<'a, Iter>(
     header: &str,
     input: &mut iter::Peekable<Iter>,
-) -> Result<Segment<'a>, ParseError>
+) -> Result<Segment<'a>>
 where
     Iter: Iterator<Item = &'a str>,
 {
@@ -452,7 +554,10 @@ where
                 break;
             }
             let (data, _) = split_comment(line.trim());
-            decays.push(parse_decay(data)?);
+            let n = decays.len() + 1;
+            decays.push(parse_decay(data)
+                .chain_err(|| ErrorKind::InvalidDecayLine(n))
+                .chain_err(|| ErrorKind::InvalidDecay(pdg_id))?);
         }
         input.next();
     }
@@ -463,57 +568,51 @@ where
     })
 }
 
-fn parse_decay_table_header(header: &str) -> Result<(i64, f64), ParseError> {
+fn parse_decay_table_header(header: &str) -> Result<(i64, f64)> {
     let (data, _) = split_comment(header);
-    let (pdg_id, rest) = match next_word(data) {
-        None => return Err(ParseError::MissingDecayingParticle),
-        Some(s) => s,
-    };
-    let pdg_id = match str::parse(pdg_id) {
-        Ok(id) => id,
-        Err(e) => return Err(ParseError::InvalidPdgId(e)),
-    };
-    let width = match str::parse(rest.trim()) {
-        Ok(width) => width,
-        Err(e) => return Err(ParseError::InvalidWidth(e)),
-    };
+    let (rest, pdg_id) = i64::parse(data).to_result().chain_err(|| {
+        ErrorKind::InvalidDecayingPdgId
+    })?;
+    let width = f64::parse(rest).end().chain_err(
+        || ErrorKind::InvalidDecay(pdg_id),
+    )?;
     Ok((pdg_id, width))
 }
 
-fn parse_decay(line: &str) -> Result<Decay, ParseError> {
+fn parse_decay(line: &str) -> Result<Decay> {
     let mut rest = line;
     let branching_ratio = match f64::parse(rest) {
         ParseResult::Done(r, value) => {
             rest = r;
             value
         }
-        ParseResult::Error(e) => return Err(ParseError::InvalidBranchingRatio(Box::new(e))),
+        ParseResult::Error(e) => bail!(e.chain_err(|| ErrorKind::InvalidBranchingRatio)),
     };
     let n_daughters = match u8::parse(rest) {
         ParseResult::Done(r, value) => {
             rest = r;
             value
         }
-        ParseResult::Error(e) => return Err(ParseError::InvalidNumOfDaughters(Box::new(e))),
+        ParseResult::Error(e) => bail!(e.chain_err(|| ErrorKind::InvalidNumOfDaughters)),
     };
     let mut daughters = Vec::new();
     for i in 0..n_daughters {
         rest = rest.trim();
         if rest.is_empty() {
-            return Err(ParseError::NotEnoughDaughters(i));
+            bail!(ErrorKind::NotEnoughDaughters(n_daughters, i));
         }
         let daughter_id = match i64::parse(rest) {
             ParseResult::Done(r, value) => {
                 rest = r;
                 value
             }
-            ParseResult::Error(e) => return Err(ParseError::InvalidDaughterId(Box::new(e))),
+            ParseResult::Error(e) => bail!(e.chain_err(|| ErrorKind::InvalidDaughterId)),
         };
         daughters.push(daughter_id);
     }
     rest.trim();
     if !rest.is_empty() {
-        return Err(ParseError::TooManyDaughters);
+        bail!(ErrorKind::IncompleteParse(rest.to_string()));
     }
     Ok(Decay {
         branching_ratio,
@@ -582,14 +681,25 @@ mod tests {
 
     #[test]
     fn test_parse_tuple() {
+        macro_rules! unwrap_parseresult {
+            ($result:expr) => {
+                match $result {
+                    ParseResult::Done(rest, value) => (rest, value),
+                    ParseResult::Error(err) => panic!(err),
+                }
+            }
+        }
         type T2 = (u8, u8);
-        assert_eq!(T2::parse("1 2"), ParseResult::Done("", (1, 2)));
-        assert_eq!(T2::parse("    1 2"), ParseResult::Done("", (1, 2)));
-        assert_eq!(T2::parse("1 2   456"), ParseResult::Done("   456", (1, 2)));
-        assert_eq!(
-            T2::parse(" 1    2      foobar"),
-            ParseResult::Done("      foobar", (1, 2))
-        );
+        assert_eq!(unwrap_parseresult!(T2::parse("1 2")), ("", (1, 2)));
+        assert_eq!(unwrap_parseresult!(T2::parse("    1 2")), ("", (1, 2)));
+        assert_eq!(unwrap_parseresult!(T2::parse("1 2   456")), (
+            "   456",
+            (1, 2),
+        ));
+        assert_eq!(unwrap_parseresult!(T2::parse(" 1    2      foobar")), (
+            "      foobar",
+            (1, 2),
+        ));
     }
 
     #[test]
