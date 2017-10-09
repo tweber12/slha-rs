@@ -14,10 +14,6 @@ pub mod errors {
 
     error_chain!{
         errors {
-            InvalidSegment(n: usize) {
-                description("Failed to parse a segment")
-                display("Failed to parse the {}th segment", n)
-            }
             MissingBlockName {
                 description("Missing block name")
             }
@@ -332,17 +328,21 @@ enum BlockScale<'a> {
     WithoutScale(Vec<Line<'a>>),
 }
 impl<'a> BlockScale<'a> {
-    fn to_block<B, E>(&self) -> result::Result<B, E>
+    fn to_block<B>(&self, name: String) -> Result<B>
     where
-        B: SlhaBlock<E>,
+        B: SlhaBlock<Error>,
     {
-        match *self {
-            BlockScale::WithoutScale(ref lines) => B::parse(lines, None),
+        let (lines, scale) = match *self {
+            BlockScale::WithoutScale(ref lines) => (lines, None),
             BlockScale::WithScale(ref vec) => {
+                if vec.len() > 1 {
+                    bail!(ErrorKind::DuplicateBlock(name));
+                }
                 let (scale, ref lines) = vec[0];
-                B::parse(&lines, Some(scale))
+                (lines, Some(scale))
             }
-        }
+        };
+        B::parse(lines, scale).chain_err(|| ErrorKind::InvalidBlock(name))
     }
 }
 
@@ -374,12 +374,8 @@ impl<'a> Slha<'a> {
             decays: HashMap::new(),
         };
         let mut lines = input.lines().peekable();
-        let mut n_segments = 0;
         while let Some(segment) = parse_segment(&mut lines) {
-            let segment = segment.chain_err(
-                || ErrorKind::InvalidSegment(n_segments + 1),
-            )?;
-            match segment {
+            match segment? {
                 Segment::Block { name, block, scale } => slha.insert_block(name, block, scale)?,
                 Segment::Decay {
                     pdg_id,
@@ -387,19 +383,18 @@ impl<'a> Slha<'a> {
                     decays,
                 } => slha.insert_decay(pdg_id, width, decays)?,
             }
-            n_segments += 1;
         }
         Ok(slha)
     }
 
     /// Lookup a block.
-    pub fn get_block<B: SlhaBlock<E>, E>(&self, name: &str) -> Option<result::Result<B, E>> {
+    pub fn get_block<B: SlhaBlock<Error>>(&self, name: &str) -> Option<Result<B>> {
         let name = name.to_lowercase();
         let block = match self.blocks.get(&name) {
             Some(lines) => lines,
             None => return None,
         };
-        Some(block.to_block())
+        Some(block.to_block(name))
     }
 
     pub fn get_decay(&self, pdg_id: i64) -> Option<&DecayTable> {
@@ -420,8 +415,12 @@ impl<'a> Slha<'a> {
     }
 
     fn insert_block_noscale(&mut self, name: String, block: Vec<Line<'a>>) -> Result<()> {
-        if self.blocks.contains_key(&name) {
-            bail!(ErrorKind::DuplicateBlock(name));
+        if let Some(block) = self.blocks.get(&name) {
+            if let BlockScale::WithScale(..) = *block {
+                bail!(ErrorKind::RedefinedBlockWithQ(name));
+            } else {
+                bail!(ErrorKind::DuplicateBlock(name));
+            }
         }
         self.blocks.insert(name, BlockScale::WithoutScale(block));
         Ok(())
@@ -433,7 +432,13 @@ impl<'a> Slha<'a> {
         });
         match *entry {
             BlockScale::WithoutScale(_) => bail!(ErrorKind::RedefinedBlockWithQ(name)),
-            BlockScale::WithScale(ref mut blocks) => blocks.push((scale, block)),
+            BlockScale::WithScale(ref mut blocks) => {
+                if blocks.iter().find(|&&(s, _)| s == scale).is_some() {
+                    bail!(ErrorKind::DuplicateBlockScale(name, scale));
+                } else {
+                    blocks.push((scale, block));
+                }
+            }
         };
         Ok(())
     }
@@ -662,6 +667,7 @@ fn split_comment(line: &str) -> (&str, Option<&str>) {
 mod tests {
     use super::{Slha, Block, BlockSingle, Parseable, ParseResult, Decay};
     use super::next_word;
+    use super::errors::{Error, ErrorKind};
 
     #[test]
     fn test_next_word() {
@@ -1290,5 +1296,808 @@ DECAY   1000021    1.01752300e+00   # gluino decays
                 daughters: vec![-2000004, 4],
             }
         );
+    }
+
+
+    #[test]
+    fn test_incomplete_parse() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      4.25    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1  1  100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Block<i8, f64>, Error> = slha.get_block("minpar").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "minpar");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_unexpected_eol() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5          # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+         5   -100.0     # A0 ";
+
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Block<i8, f64>, Error> = slha.get_block("sminputs").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "sminputs");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_unexpected_eol_tuple() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88194465e-01   # Yt(Q)MSSM DRbar
+Block yx Q= 40
+    3  3 1.4e-01
+Block yd Q= 50
+    3
+Block ye Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block ye Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Block<i8, f64>, Error> = slha.get_block("yd").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "yd");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_invalid_int() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     a      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Block<i8, f64>, Error> = slha.get_block("sminputs").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "sminputs");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_invalid_float() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.8819a465e-01   # Yt(Q)MSSM DRbar
+Block yd Q= 40
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block ye Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block ye Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Block<i8, f64>, Error> = slha.get_block("yu").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "yu");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_unknown_segment() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yd Q= 40
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block ye Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+FLUP ye Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::UnknownSegment(name), _) = err {
+            assert_eq!(&name, "flup");
+        } else {
+            panic!("Wrong error variant {:?} instead of UnknownSegment", err);
+        }
+    }
+
+    #[test]
+    fn test_unexpected_ident() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+ Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::UnexpectedIdent(line), _) = err {
+            assert_eq!(&line, " Block MODSEL  # Select model");
+        } else {
+            panic!("Wrong error variant {:?} instead of UnexpectedIdent", err);
+        }
+    }
+
+    #[test]
+    fn test_missing_block_name() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::MissingBlockName, _) = err {
+        } else {
+            panic!("Wrong error variant {:?} instead of MissingBlockName", err);
+        }
+    }
+
+    #[test]
+    fn test_malformed_block_header() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SM INPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "sm");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_duplicate_block() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MODsel  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::DuplicateBlock(name), _) = err {
+            assert_eq!(&name, "modsel");
+        } else {
+            panic!("Wrong error variant {:?} instead of DuplicateBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_duplicate_block_scale() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yu Q= 8
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+        3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Block<(i8, i8), f64>, Error> = slha.get_block("yu").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::DuplicateBlock(name), _) = err {
+            assert_eq!(&name, "yu");
+        } else {
+            panic!("Wrong error variant {:?} instead of DuplicateBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_duplicate_block_equal_scale() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yf Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yu Q= 8
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::DuplicateBlockScale(name, scale), _) = err {
+            assert_eq!(&name, "yf");
+            assert_eq!(scale, 4.64649125e+02);
+        } else {
+            panic!(
+                "Wrong error variant {:?} instead of DuplicateBlockScale",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn test_redefined_block_with_scale_1() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yf
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yu Q= 8
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::RedefinedBlockWithQ(name), _) = err {
+            assert_eq!(&name, "yf");
+        } else {
+            panic!(
+                "Wrong error variant {:?} instead of DuplicateBlockWithQ",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn test_redefined_block_with_scale_2() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yf Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yu Q= 8
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+        3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::RedefinedBlockWithQ(name), _) = err {
+            assert_eq!(&name, "yf");
+        } else {
+            panic!(
+                "Wrong error variant {:?} instead of DuplicateBlockWithQ",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_scale() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yd Q= 40
+    3  3 1.4e-01
+Block yd Q=
+    3  3 1.4e-01
+Block ye Q= 3.23 scale # comment
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "yd");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_invalid_scale_trailing() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yd Q= 40
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block ye Q= 70 other stuff # comment
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "ye");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_duplicate_decay() {
+        // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025    1.01752300e+00   # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+    ";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::DuplicateDecay(pdg_id), _) = err {
+            assert_eq!(pdg_id, 1000022);
+        } else {
+            panic!("Wrong error variant {:?} instead of DuplicateDecay", err);
+        }
+    }
+
+    #[test]
+    fn test_missing_decaying_particle() {
+        // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY      # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::InvalidDecayingPdgId, _) = err {
+        } else {
+            panic!(
+                "Wrong error variant {:?} instead of InvalidDecayingPdgId",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_pdg_id() {
+        // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   100a025    1.01752300e+00   # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::InvalidDecayingPdgId, _) = err {
+        } else {
+            panic!(
+                "Wrong error variant {:?} instead of InvalidDecayingPdgId",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_width() {
+        // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025     1,01752300e+00  # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::InvalidDecay(pdg_id), _) = err {
+            assert_eq!(pdg_id, 1000025);
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidDecay", err);
+        }
+    }
+
+    #[test]
+    fn test_missing_width() {
+        // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022       # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025    1.043634   # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::InvalidDecay(pdg_id), _) = err {
+            assert_eq!(pdg_id, 1000022);
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidDecay", err);
+        }
+    }
+
+    #[test]
+    fn test_invalid_branchingratio() {
+        // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3x91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025     1.01752300e+00  # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::InvalidDecay(pdg_id), _) = err {
+            assert_eq!(pdg_id, 1000021);
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidDecay", err);
+        }
+    }
+
+    #[test]
+    fn test_invalid_numofdaughters() {
+        // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025     1.01752300e+00  # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     two  -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::InvalidDecay(pdg_id), _) = err {
+            assert_eq!(pdg_id, 1000020);
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidDecay", err);
+        }
+    }
+
+    #[test]
+    fn test_invalid_daughterid() {
+        // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        =2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4   # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025     1.01752300e+00  # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::InvalidDecay(pdg_id), _) = err {
+            assert_eq!(pdg_id, 1000021);
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidDecay", err);
+        }
+    }
+
+    #[test]
+    fn test_missing_daughter() {
+        // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004           # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025     1.01752300e+00  # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::InvalidDecay(pdg_id), _) = err {
+            assert_eq!(pdg_id, 1000022);
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidDecay", err);
+        }
+    }
+
+    #[test]
+    fn test_too_many_daughters() {
+        // Pieces of the example file from appendix D.3 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+DECAY   1000021    1.01752300e+00   # gluino decays
+    4.18313300E-02     2     1000001        -1   # BR(~g -> ~d_L dbar)
+    1.55587600E-02     2     2000001        -1   # BR(~g -> ~d_R dbar)
+    3.91391000E-02     2     1000002        -2   # BR(~g -> ~u_L ubar)
+    1.74358200E-02     2     2000002        -2   # BR(~g -> ~u_R ubar)
+    4.18313300E-02     2     1000003        -3   # BR(~g -> ~s_L sbar)
+DECAY   1000022    1.01752300e+00   # gluino decays
+    1.55587600E-02     2     2000003        -3   # BR(~g -> ~s_R sbar)
+    3.91391000E-02     2     1000004        -4   # BR(~g -> ~c_L cbar)
+    1.74358200E-02     2     2000004        -4 9 # BR(~g -> ~c_R cbar)
+    1.13021900E-01     2     1000005        -5   # BR(~g -> ~b_1 bbar)
+    6.30339800E-02     2     2000005        -5   # BR(~g -> ~b_2 bbar)
+    9.60140900E-02     2     1000006        -6   # BR(~g -> ~t_1 tbar)
+    0.00000000E+00     2     2000006        -6   # BR(~g -> ~t_2 tbar)
+DECAY   1000025     1.01752300e+00  # gluino decays
+    4.18313300E-02     2    -1000001         1   # BR(~g -> ~dbar_L d)
+    1.55587600E-02     2    -2000001         1   # BR(~g -> ~dbar_R d)
+    3.91391000E-02     2    -1000002         2   # BR(~g -> ~ubar_L u)
+    1.74358200E-02     2    -2000002         2   # BR(~g -> ~ubar_R u)
+    4.18313300E-02     2    -1000003         3   # BR(~g -> ~sbar_L s)
+DECAY   1000020    1.01752300e+00   # gluino decays
+    1.55587600E-02     2    -2000003         3   # BR(~g -> ~sbar_R s)
+    3.91391000E-02     2    -1000004         4   # BR(~g -> ~cbar_L c)
+    1.74358200E-02     2    -2000004         4   # BR(~g -> ~cbar_R c)
+";
+        let err = Slha::parse(input).unwrap_err();
+        if let Error(ErrorKind::InvalidDecay(pdg_id), _) = err {
+            assert_eq!(pdg_id, 1000022);
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidDecay", err);
+        }
     }
 }
