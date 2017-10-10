@@ -6,6 +6,106 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+//! A crate to read SUSY Les Houches Accord (or SLHA) files.
+//!
+//! This crate aims to be as general as possible, in the sense that Blocks of arbitrary types are
+//! supported.
+//! In particular, all the Blocks defined in the SLHA 1 and 2 standards can be read using this
+//! crate.
+//!
+//! There are two ways to use this crate, using `derive` or a runtime parse.
+//! Using `derive` is the recommended way to use this library, and the `runtime` parser should
+//! only be used if `derive` can not be used, most notably in the case when the necessary Blocks
+//! are only known at runtime.
+//!
+//! # Usage example
+//!
+//! The following is a full example using the `derive` method to extract blocks and decays from an
+//! SLHA file. An example using the `runtime` method can be found in the `The runtime parser`
+//! section.
+//! To be able to use this example, you will have to add
+//!
+//! ```toml
+//! ...
+//!
+//! #[dependencies]
+//! slha = "0.5"
+//! slha-derive = "0.5"
+//! error-chain = "0.1"
+//! ```
+//!
+//! to your `Cargo.toml`.
+//!
+//! ```rust
+//! extern crate slha;
+//! #[macro_use]
+//! extern crate slha_derive;
+//! extern crate error_chain;
+//!
+//! use std::collections::HashMap;
+//! use slha::{Block, DecayTable, SlhaDeserialize};
+//! use error_chain::ChainedError;
+//!
+//! #[derive(Debug, SlhaDeserialize)]
+//! struct Slha {
+//!     mass: Block<i64, f64>,
+//!     ye: Vec<Block<(i8, i8), f64>>,
+//!     decays: HashMap<i64, DecayTable>,
+//! }
+//!
+//! fn main() {
+//!     // In a more realistic example, this would be read from a file somewhere.
+//!     let input = "
+//! BLOCK MASS
+//!    6    173.2    # M_t
+//! BLOCK ye Q= 1
+//!    3   3    4.2
+//! BLOCK ye Q= 2
+//!    3   3    8.4
+//! Decay 6 1.35
+//!    1  2   5  24  # t > W+ b
+//! ";
+//!
+//!     match Slha::deserialize(input) {
+//!         Ok(slha) => {
+//!             assert_eq!(slha.mass.map[&6], 173.2);
+//!             assert_eq!(slha.mass.scale, None);
+//!             assert_eq!(slha.ye.len(), 2);
+//!             assert_eq!(slha.ye[0].scale, Some(1.));
+//!             assert_eq!(slha.ye[1].map[&(3,3)], 8.4);
+//!             assert_eq!(slha.decays[&6].width, 1.35);
+//!         }
+//!         Err(err) => eprintln!("{}", err.display_chain()),
+//!     }
+//! }
+//! ```
+//!
+//! # Using derive
+//!
+//! Together with the `slha-derive` crate, it is possible to deserialize a SLHA file directly into a rust
+//! struct.
+//!
+//! ## Blocks
+//!
+//! Each field of the struct is treated as a block in the SLHA file with the same
+//! (case-insensitive) name as the field.
+//! While the fields can be of any type that implements the `SlhaBlock` trait, the most common blocks,
+//! including all blocks defined in the SLHA 1 and 2 papers, can be expressed using two block types
+//! defined in this crate, `Block` and `BlockSingle`.
+//!
+//! All blocks defined this way by the struct must be present in the SLHA file, or an error is
+//! returned.
+//! Blocks that are included in the SLHA file but not in the struct are ignored.
+//! Therefore it is possible to pick and choose the blocks that are necessary for a task without
+//! having to include (and know the types of) all the others.
+//!
+//! ### Optional blocks
+//!
+//! The default behaviour is to return an error if a block declared in the struct is not present in
+//! the SLHA file.
+//! Since this is not always desireable, it is possible to mark blocks as optional by wrapping the
+//! type of the block in `Option`.
+
 #![recursion_limit="128"]
 
 #[macro_use]
