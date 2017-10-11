@@ -88,7 +88,9 @@
 //! ## Blocks
 //!
 //! Each field of the struct is treated as a block in the SLHA file with the same
-//! (case-insensitive) name as the field.
+//! (case-insensitive) name as the field. The block-name that should be deserialized into a field
+//! can be customized using the `rename` attribute.
+//!
 //! While the fields can be of any type that implements the `SlhaBlock` trait, the most common blocks,
 //! including all blocks defined in the SLHA 1 and 2 papers, can be expressed using two block types
 //! defined in this crate, `Block` and `BlockSingle`.
@@ -99,12 +101,83 @@
 //! Therefore it is possible to pick and choose the blocks that are necessary for a task without
 //! having to include (and know the types of) all the others.
 //!
+//!
 //! ### Optional blocks
 //!
 //! The default behaviour is to return an error if a block declared in the struct is not present in
 //! the SLHA file.
 //! Since this is not always desireable, it is possible to mark blocks as optional by wrapping the
-//! type of the block in `Option`.
+//! type of the block in an `Option`.
+//!
+//! ```rust
+//! # extern crate slha;
+//! # #[macro_use]
+//! # extern crate slha_derive;
+//! # extern crate error_chain;
+//! #
+//! # use slha::{Block, DecayTable, SlhaDeserialize};
+//! #
+//! #[derive(Debug, SlhaDeserialize)]
+//! struct Slha {
+//!     mass: Option<Block<i64, f64>>,
+//! }
+//! #
+//! # fn main() {
+//! let present = "
+//! BLOCK MASS
+//!    6    173.2    # M_t
+//! ";
+//!
+//! let present = Slha::deserialize(present).unwrap();
+//! assert!(slha.mass.is_some());
+//! let not_present = Slha::deserialize("").unwrap();
+//! assert!(slha.mass.is_none());
+//! # }
+//! ```
+//!
+//!
+//! ### Repeated blocks
+//!
+//! How duplicate blocks are handled depends on the type of the field that the block is written
+//! into.
+//!
+//! If the type is a Block, any block that appears more than once, even with different scale is an
+//! error.
+//! However, the SLHA standard allows for blocks (with different scales) to appear multiple times in an SLHA
+//! file. To store all occurences of a block, the block can be wrapped in a `Vec`. An error is
+//! returned if the blocks do not have different scales.
+//!
+//! ```rust
+//! # extern crate slha;
+//! # #[macro_use]
+//! # extern crate slha_derive;
+//! # extern crate error_chain;
+//! #
+//! # use std::collections::HashMap;
+//! # use slha::{Block, DecayTable, SlhaDeserialize};
+//! # use error_chain::ChainedError;
+//! #
+//! #[derive(Debug, SlhaDeserialize)]
+//! struct Slha {
+//!     ye: Vec<Block<(i8, i8), f64>>,
+//! }
+//! #
+//! # fn main() {
+//! let input = "
+//! BLOCK ye Q= 1
+//!    3   3    4.2
+//! BLOCK ye Q= 2
+//!    3   3    8.4
+//! ";
+//!
+//! let slha = Slha::deserialize(input).unwrap();
+//! assert_eq!(slha.ye.len(), 2);
+//! assert_eq!(slha.ye[0].scale, Some(1.));
+//! assert_eq!(slha.ye[0].map[&(3,3)], 4.2);
+//! assert_eq!(slha.ye[1].scale, Some(2.));
+//! assert_eq!(slha.ye[1].map[&(3,3)], 8.4);
+//! # }
+//! ```
 
 #![recursion_limit="128"]
 
