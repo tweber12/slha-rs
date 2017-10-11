@@ -148,7 +148,7 @@ fn generate_let_bindings(blocks: &[Block], has_decays: bool) -> Vec<quote::Token
 fn generate_match_arm_decays(has_decays: bool) -> quote::Tokens {
     if has_decays {
         quote! {
-            slha::Segment::Decay { pdg_id, width, decays: decay_table } => {
+            slha::internal::Segment::Decay { pdg_id, width, decays: decay_table } => {
                 let duplicate = decays.insert(pdg_id, slha::DecayTable { width, decays: decay_table });
                 if duplicate.is_some() {
                     return Err(slha::errors::ErrorKind::DuplicateDecay(pdg_id).into());
@@ -157,7 +157,7 @@ fn generate_match_arm_decays(has_decays: bool) -> quote::Tokens {
         }
     } else {
         quote! {
-            slha::Segment::Decay { .. } => continue,
+            slha::internal::Segment::Decay { .. } => continue,
         }
     }
 }
@@ -166,11 +166,11 @@ fn generate_match_arm_blocks(blocks: &[Block]) -> quote::Tokens {
     let arms = generate_match_arms_block_name(blocks);
     if arms.is_empty() {
         quote!{
-            slha::Segment::Block { .. } => continue,
+            slha::internal::Segment::Block { .. } => continue,
         }
     } else {
         quote!{
-            slha::Segment::Block { name, block, scale } => {
+            slha::internal::Segment::Block { name, block, scale } => {
                 match name.as_ref() {
                     #(#arms)*
                     _ => continue,
