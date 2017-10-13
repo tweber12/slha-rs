@@ -454,6 +454,14 @@ impl<'a> Slha<'a> {
         blocks.iter().map(|block| block.to_block(&name)).collect()
     }
 
+    pub fn get_raw_blocks<'s>(&'s self, name: &str) -> Option<&'s [RawBlock<'a>]> {
+        let name = name.to_lowercase();
+        match self.blocks.get(&name) {
+            Some(blocks) => Some(&blocks),
+            None => None,
+        }
+    }
+
     pub fn get_decay(&self, pdg_id: i64) -> Option<&DecayTable> {
         self.decays.get(&pdg_id)
     }
@@ -482,7 +490,7 @@ fn find_duplicates<T: Clone + PartialOrd>(mut list: Vec<T>) -> Option<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Slha, Block, BlockSingle, BlockStr, Parseable, ParseResult, Decay};
+    use super::{Slha, Block, BlockSingle, BlockStr, RawBlock, Parseable, ParseResult, Decay, Line};
     use super::errors::{Error, ErrorKind};
 
     #[test]
@@ -528,6 +536,56 @@ block Mass
     }
 
     #[test]
+    fn test_parse_raw_blocks() {
+        let input = "\
+BLOCK TEST
+ 1 3
+ 4 6
+block Mass
+  6  173.2
+block Mass
+  5  0.
+  ";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let blocks: &[RawBlock] = slha.get_raw_blocks("test").unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].lines.len(), 2);
+        assert_eq!(
+            blocks[0].lines[0],
+            Line {
+                data: "1 3",
+                comment: None,
+            }
+        );
+        assert_eq!(
+            blocks[0].lines[1],
+            Line {
+                data: "4 6",
+                comment: None,
+            }
+        );
+        let blocks: &[RawBlock] = slha.get_raw_blocks("mass").unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].lines.len(), 1);
+        assert_eq!(
+            blocks[0].lines[0],
+            Line {
+                data: "6  173.2",
+                comment: None,
+            }
+        );
+        assert_eq!(blocks[1].lines.len(), 1);
+        assert_eq!(
+            blocks[1].lines[0],
+            Line {
+                data: "5  0.",
+                comment: None,
+            }
+        );
+    }
+
+    #[test]
     fn test_parse_block_comment() {
         let input = "\
 # This block contains information
@@ -553,6 +611,64 @@ block Mass
         let block: Block<i64, f64> = slha.get_block("mass").unwrap().unwrap();
         assert_eq!(block.map.len(), 1);
         assert_eq!(block.map[&6], 173.2);
+    }
+
+    #[test]
+    fn test_parse_raw_blocks_comment() {
+        let input = "\
+# This block contains information
+# about testing.
+BLOCK TEST # This is the block header
+# Lets put a comment here, because why not
+ 1 3 # Testcase number one
+# How about we separate the two lines here
+ # by two comment lines, one of which is indented
+ 4 6     # Testcase number two
+
+# The masses of all particles
+block Mass
+  6  173.2    # M_top
+block Mass # Why not split the masses?
+  5  0.   #     Mass of the b-quark
+# A trailing comment can't hurt, now can it?
+";
+        let slha = Slha::parse(input).unwrap();
+        println!("{:?}", slha);
+        let blocks: &[RawBlock] = slha.get_raw_blocks("test").unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].lines.len(), 2);
+        assert_eq!(
+            blocks[0].lines[0],
+            Line {
+                data: "1 3 ",
+                comment: Some("# Testcase number one"),
+            }
+        );
+        assert_eq!(
+            blocks[0].lines[1],
+            Line {
+                data: "4 6     ",
+                comment: Some("# Testcase number two"),
+            }
+        );
+        let blocks: &[RawBlock] = slha.get_raw_blocks("mass").unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].lines.len(), 1);
+        assert_eq!(
+            blocks[0].lines[0],
+            Line {
+                data: "6  173.2    ",
+                comment: Some("# M_top"),
+            }
+        );
+        assert_eq!(blocks[1].lines.len(), 1);
+        assert_eq!(
+            blocks[1].lines[0],
+            Line {
+                data: "5  0.   ",
+                comment: Some("#     Mass of the b-quark"),
+            }
+        );
     }
 
     #[test]
