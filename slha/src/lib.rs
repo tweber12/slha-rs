@@ -113,9 +113,8 @@
 //! # extern crate slha;
 //! # #[macro_use]
 //! # extern crate slha_derive;
-//! # extern crate error_chain;
 //! #
-//! # use slha::{Block, DecayTable, SlhaDeserialize};
+//! # use slha::{Block, SlhaDeserialize};
 //! #
 //! #[derive(Debug, SlhaDeserialize)]
 //! struct Slha {
@@ -129,9 +128,9 @@
 //! ";
 //!
 //! let present = Slha::deserialize(present).unwrap();
-//! assert!(slha.mass.is_some());
+//! assert!(present.mass.is_some());
 //! let not_present = Slha::deserialize("").unwrap();
-//! assert!(slha.mass.is_none());
+//! assert!(not_present.mass.is_none());
 //! # }
 //! ```
 //!
@@ -154,8 +153,7 @@
 //! # extern crate error_chain;
 //! #
 //! # use std::collections::HashMap;
-//! # use slha::{Block, DecayTable, SlhaDeserialize};
-//! # use error_chain::ChainedError;
+//! # use slha::{Block, SlhaDeserialize};
 //! #
 //! #[derive(Debug, SlhaDeserialize)]
 //! struct Slha {
@@ -178,8 +176,46 @@
 //! assert_eq!(slha.ye[1].map[&(3,3)], 8.4);
 //! # }
 //! ```
+//!
+//!
+//! ## Decays
+//!
+//! Decays can be read in as well.
+//! For this a field with name `decays` and type `HashMap<i64, DecayTable>` has to be present in
+//! the struct.
+//! The `decays` field then contains a map from the pdg_id of the decaying particle to the
+//! `DecayTable` of the particle.
+//! An error is returned if there are multiple decay tables for the same particle.
+//!
+//! ```rust
+//! # extern crate slha;
+//! # #[macro_use]
+//! # extern crate slha_derive;
+//! #
+//! # use std::collections::HashMap;
+//! # use slha::{DecayTable, SlhaDeserialize};
+//! #
+//! #[derive(Debug, SlhaDeserialize)]
+//! struct Slha {
+//!     decays: HashMap<i64, DecayTable>,
+//! }
+//! #
+//! # fn main() {
+//! let input = "
+//! Decay 6 1.35
+//!    1  2   5  24  # t > W+ b
+//! ";
+//!
+//! let slha = Slha::deserialize(input).unwrap();
+//! assert_eq!(slha.decays[&6].width, 1.35);
+//! let decays = &slha.decays[&6].decays;
+//! assert_eq!(decays.len(), 1);
+//! assert_eq!(decays[0].branching_ratio, 1.);
+//! assert_eq!(decays[0].daughters, vec![5, 24]);
+//! # }
+//! ```
 
-#![recursion_limit="128"]
+#![recursion_limit="256"]
 
 #[macro_use]
 extern crate error_chain;
@@ -193,47 +229,69 @@ pub mod internal;
 use internal::{Segment, next_word};
 
 pub mod errors {
+    //! Errors that may occur when parsing an SLHA file into rust types.
     use std::num::{ParseFloatError, ParseIntError};
 
     error_chain!{
         errors {
+            /// A block without a name was found in the SLHA file.
             MissingBlockName {
                 description("Missing block name")
             }
+            /// A BLOCK in the SLHA file could not be parsed into a `Block`.
+            ///
+            /// The field of this variant is the name of the problematic block.
             InvalidBlock(name: String) {
                 description("Malformed block")
                 display("Malformed block: '{}'", name)
             }
+            /// A BLOCK in the SLHA file could not be parsed into a `BlockSingle`.
+            ///
+            /// The field of this variant is the name of the problematic block.
             InvalidBlockSingle(name: String) {
                 description("Malformed block single")
                 display("Malformed block single: '{}'", name)
             }
+            /// The pdg id of a DECAY segment could not be read.
             InvalidDecayingPdgId {
                 description("Failed to parse the pdg id of the decaying particle")
             }
+            /// A parse error occured while parsing a DECAY segment.
+            ///
+            /// The field of this variant is the pdg id of the problematic DECAY.
             InvalidDecay(pdg_id: i64) {
                 description("Invalid decay table")
                 display("Invalid decay table for particle {}", pdg_id)
             }
+            /// A (sub)parser did not consume a whole line.
+            ///
+            /// This error is returned if e.g. a line from a block is parsed and there is
+            /// unexpected input at the end of the line.
             IncompleteParse(rest: String) {
                 description("The parser did not consume the whole line")
                 display("The parser did not consume the whole line, '{}' was left over", rest)
             }
+            /// There was not enough data to parse a line in the SLHA file into the desired rust
+            /// type.
             UnexpectedEol {
                 description("The parser reached the end of the line before finishing")
             }
+            /// An integer type was expected but could not be read from the file.
             InvalidInt(err: ParseIntError) {
                 description("Failed to parse an integer")
                 display("Failed to parse an integer: {}", err)
             }
+            /// An floating point type was expected but could not be read from the file.
             InvalidFloat(err: ParseFloatError) {
                 description("Failed to parse a floating point number")
                 display("Failed to parse a floating point number: {}", err)
             }
+            /// A top level segment other than "BLOCK" or "DECAY" was encountered.
             UnknownSegment(segment: String) {
                 description("Unknown top level segment encountered")
                 display("Unknown top level segment encountered: '{}'", segment)
             }
+            /// The beginning of a new segment was expected, but a (idented) data line was found.
             UnexpectedIdent(line: String) {
                 description("Expected the beginning of a segment, found an indented line instead")
                 display("Expected the beginning of a segment, found an indented line instead: '{}'", line)
@@ -242,59 +300,96 @@ pub mod errors {
                 description("Encountered trailing non-whitespace characters after block header")
                 display("Encountered trailing non-whitespace characters after block header: '{}'", rest)
             }
+            /// A line in the body of a block could not be parsed into the desired type.
+            ///
+            /// The field in this variant is the number of the _data_ line _in the block_ where the error
+            /// occured.
             InvalidBlockLine(n: usize) {
                 description("Failed to parse a line in the body")
                 display("Failed to parse the {}th data line in the body", n)
             }
+            /// The key part of a block could not be read.
             InvalidBlockKey {
                 description("Failed to parse the key of a block")
             }
+            /// The value part of a block could not be read.
             InvalidBlockValue {
                 description("Failed to parse the value of a block")
             }
+            /// A block (without scale) appeared more than once in the SLHA file.
+            ///
+            /// The field contains the name of the block.
             DuplicateBlock(name: String) {
                 description("Found a duplicate block")
                 display("Found a duplicate block: '{}'", name)
             }
+            /// A block with scale appeared more than once in the SLHA file with the same scale.
+            ///
+            /// The two fields contain the name of the block and the scale.
             DuplicateBlockScale(name: String, scale: f64) {
                 description("Found a duplicate block with equal scale")
                 display("Found a duplicate block with name '{}' and scale '{}'", name, scale)
             }
+            /// A block appears in the SLHA file both with and without scale.
+            ///
+            /// The field contains the name of the block.
             RedefinedBlockWithQ(name: String) {
                 description("Found a duplicate block with and without scale")
                 display("Found a duplicate block with and without scale: '{}'", name)
             }
+            /// The scale of a block could not be read.
+            ///
+            /// The field contains the name of the block.
             InvalidScale {
                 description("Failed to parse the scale")
             }
+            /// The SLHA file contains to DECAY tables for the same particle.
+            ///
+            /// The field contains the pdg id of the particle.
             DuplicateDecay(pdg_id: i64) {
                 description("Found multiple decay tables for the same particle")
                 display("Found multiple decay tables for the same particle: '{}'", pdg_id)
             }
+            /// A data line from a DECAY table could not be read.
+            ///
+            /// The field contains the number of the _data_ line _in the DECAY table_.
             InvalidDecayLine(n: usize) {
                 description("Failed to parse a line in the body")
                 display("Failed to parse the {}th data line in the body", n)
             }
+            /// The width in a DECAY table could not be read.
             InvalidWidth {
                 description("Failed to parse the width")
             }
+            /// The branching ratio in a DECAY could not be read.
             InvalidBranchingRatio {
                 description("Failed to parse the branching ratio")
             }
+            /// The number of daughters in a DECAY could not be read.
             InvalidNumOfDaughters {
                 description("Failed to parse the number of daughter particles")
             }
+            /// There where less daughters in a decay than declared.
+            ///
+            /// The two field gives the number of expected and found daughters in that order.
             NotEnoughDaughters(expected: u8, found: u8) {
                 description("Did not find enough daughter particles")
                 display("Did not find enough daughter particles, expected {} but found {}", expected, found)
             }
+            /// The pdg id of a daughter particle in a decay could not be read.
             InvalidDaughterId {
                 description("Failed to parse the pdg id of a daughter particle")
             }
+            /// A block read into a `BlockSingle` contains more than one data line.
+            ///
+            /// The field gives the number of data lines found.
             WrongNumberOfValues(n: usize) {
                 description("Found too many values in a single valued block")
                 display("Found {} values in a single valued block", n)
             }
+            /// A required block was not included in the SLHA file.
+            ///
+            /// The field gives the name of the block.
             MissingBlock(name: String) {
                 description("A block is missing")
                 display("Did not find the block with name '{}'", name)
@@ -305,26 +400,69 @@ pub mod errors {
 
 use errors::*;
 
+/// A trait for structs that can be deserialized from an SLHA file.
+///
+/// This trait should not be derived manually, instead, if possible, it should be automatically
+/// derived using the `slha-derive` crate.
 pub trait SlhaDeserialize: Sized {
+    /// Deserialize a SLHA file into a rust struct.
+    ///
+    /// # Errors
+    ///
+    /// If the deserialization fails an `Error` should be returned.
     fn deserialize(&str) -> Result<Self>;
 }
 
-/// A trait for blocks that can be read from an SLHA file.
+/// A trait for types that can be created from a block in an SLHA file.
+///
+/// This trait is used by the custom derive macro and by the `get_block(s)` method of the `Slha`
+/// struct to convert the body of a block read from the file into a rust type.
+/// Therefore this trait must be implemented for any type that you want to directly read from an
+/// SLHA block.
 pub trait SlhaBlock<E>: Sized {
-    /// Parse the block from an SLHA file.
+    /// Parses the block from an SLHA file.
     ///
-    /// The argument of the `parse` function are all lines that belong
+    /// The first argument of the `parse` function are all the data lines that belong
     /// to the block.
+    /// All empty lines or lines containing only comments are not included.
+    /// The second argument is the scale at which the contents of the block have been evaluated for
+    /// running parameters.
+    /// If no scale was given in the block header, this is `None`.
+    ///
+    /// # Errors
+    ///
+    /// An error should be returned if the body of the block can not be parsed into an object of
+    /// of the implementing type.
     fn parse<'a>(&[Line<'a>], scale: Option<f64>) -> result::Result<Self, E>;
+
+    /// Returns the scale at which the block contents are defined, if any.
     fn scale(&self) -> Option<f64>;
 }
 
 #[derive(Debug)]
+/// Return type of the parse function defined by the `Parseable` trait.
 pub enum ParseResult<'input, T> {
+    /// The value was parsed successfully.
+    ///
+    /// This variant contains the parsed value (in second position) and the remaining input (in
+    /// first position).
     Done(&'input str, T),
+    /// The input could not be parsed into a value of the desired type.
+    ///
+    /// The field is an `Error` object detailing the problem.
     Error(Error),
 }
 impl<'input, T> ParseResult<'input, T> {
+    /// Extract the parsed value from the last parser that should act on the input.
+    ///
+    /// Since this method is supposed to be used after all parsers are done, there should not be
+    /// any (non whitespace) input left.
+    /// If there is, an error is returned.
+    ///
+    /// # Errors
+    ///
+    /// * If the parser returned an error.
+    /// * If there is input remaining.
     fn end(self) -> Result<T> {
         match self {
             ParseResult::Error(e) => Err(e),
@@ -336,6 +474,14 @@ impl<'input, T> ParseResult<'input, T> {
             ParseResult::Done(_, value) => Ok(value),
         }
     }
+    /// Turn a `ParseResult` into a normal result.
+    ///
+    /// This method can be used together with the '?' operator to chain parsers.
+    /// Unlike with the `end` method the remaining input is also returned.
+    ///
+    /// # Errors
+    ///
+    /// If the ParseResult was an `Error`.
     fn to_result(self) -> Result<(&'input str, T)> {
         match self {
             ParseResult::Done(rest, value) => Ok((rest, value)),
@@ -344,7 +490,14 @@ impl<'input, T> ParseResult<'input, T> {
     }
 }
 
+/// A trait used by the various `Block`s to read the key and value from a line in
+/// an SLHA file.
 pub trait Parseable: Sized {
+    /// Parse a value from the input string.
+    ///
+    /// The difference to `std::str::parse` is that partially consuming the input is allowed.
+    /// The remaining input is included in the returned `ParseResult` and therefore still available
+    /// for chaining parsers.
     fn parse<'input>(&'input str) -> ParseResult<'input, Self>;
 }
 
@@ -420,12 +573,135 @@ impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10);
 impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11);
 impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12);
 
+/// A block from an SLHA file treated as a map.
+///
+/// Most blocks from SLHA files represent blocks from some key(s) to a value.
+/// In fact, only one block defined in the SLHA 1 standard does not belong to this category.
+/// These 'map-type' blocks can be represented (and parsed) by the `Block` type.
+///
+/// The `Block` type can represent maps from any key type to any value type, as long as both key
+/// and value implement the `Parseable` trait.
+/// Implementations of this trait for all numeric types as well as for Strings and tuples are
+/// included in this crate, which is enough to cover all blocks defined in the SLHA 1 and 2 papers.
+/// There is however one restriction when using Strings. The parseable impl of String takes the
+/// whole line, which means that String can not be used as a key.
+///
+/// # Reading blocks
+///
+/// `Block` implements the `SlhaBlock` trait and therefore can be read from an SLHA file.
+/// This can be done in two different ways, the recommended way using `slha-derive` or using an
+/// `Slha` object.
+///
+/// ## Using derive
+///
+/// The easiest way to read an SLHA file is to automatically derive the `SlhaDerive` trait on  a
+/// struct.
+///
+/// ```rust
+/// # extern crate slha;
+/// # #[macro_use]
+/// # extern crate slha_derive;
+/// #
+/// # use slha::{Block, SlhaDeserialize};
+/// #
+/// #[derive(Debug, SlhaDeserialize)]
+/// struct Slha {
+///     mass: Block<i64, f64>,
+/// }
+/// #
+/// # fn main() {
+/// let input = "
+/// BLOCK MASS
+///    6    173.2    # M_t
+/// ";
+///
+/// let slha = Slha::deserialize(input).unwrap();
+/// let mass = slha.mass;
+/// assert_eq!(mass.scale, None);
+/// assert_eq!(mass.map.len(), 1);
+/// assert_eq!(mass.map[&6], 173.2);
+/// # }
+/// ```
+///
+///
+/// ## Using an `Slha` object
+///
+/// Using an `Slha` object to parse an SLHA file is less convenient than using the `SlhaDerive`
+/// trait, but more flexible.
+/// See the crate level documentation for more information.
+///
+/// ```rust
+/// # extern crate slha;
+/// #
+/// # use slha::{Slha, Block, SlhaDeserialize};
+/// #
+/// # fn main() {
+/// let input = "
+/// BLOCK MASS
+///    6    173.2    # M_t
+/// ";
+///
+/// let slha = Slha::parse(input).unwrap();
+/// let mass: Block<i64, f64> = match slha.get_block("mass") {
+///     Some(block) => match block {
+///         Ok(mass) => mass,
+///         Err(err) => panic!("Parse error while parsing block 'mass': {}", err),
+///     },
+///     None => panic!("Missing block 'mass'"),
+/// };
+/// assert_eq!(mass.scale, None);
+/// assert_eq!(mass.map.len(), 1);
+/// assert_eq!(mass.map[&6], 173.2);
+/// # }
+/// ```
+///
+/// # Nested maps
+///
+/// Nested maps, i.e. blocks that represent a map where the values are again maps, can not be
+/// represented directly by this `Block` type.
+/// They can however be simulated using tuples as keys.
+/// For e.g. mixing matrices instead of having two nested maps, one for each index, a single tuple
+/// is used as index into the block, where the tuple contains both indices into the matrix.
+/// The following example shows how to access the stop mixing matrix using this technique.
+///
+/// ```rust
+/// # extern crate slha;
+/// # #[macro_use]
+/// # extern crate slha_derive;
+/// #
+/// # use slha::{Block, SlhaDeserialize};
+/// #
+/// #[derive(SlhaDeserialize)]
+/// struct Slha {
+///     stopmix: Block<(u8,u8), f64>,
+/// }
+///
+/// # fn main() {
+/// let input = "\
+/// Block stopmix  # stop mixing matrix
+///    1  1     5.37975095e-01   # O_{11}
+///    1  2     8.42960733e-01   # O_{12}
+///    2  1     8.42960733e-01   # O_{21}
+///    2  2    -5.37975095e-01   # O_{22}
+/// ";
+///
+/// let slha = Slha::deserialize(input).unwrap();
+/// let stopmix = &slha.stopmix;
+/// assert_eq!(stopmix.map.len(), 4);
+/// assert_eq!(stopmix.map[&(1, 1)], 5.37975095e-01);
+/// assert_eq!(stopmix.map[&(1, 2)], 8.42960733e-01);
+/// assert_eq!(stopmix.map[&(2, 1)], 8.42960733e-01);
+/// assert_eq!(stopmix.map[&(2, 2)], -5.37975095e-01);
+/// # }
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Block<Key, Value>
 where
     Key: Hash + Eq,
 {
+    /// The scale at which this block is defined, if any.
     pub scale: Option<f64>,
+    /// The map from keys to values.
     pub map: HashMap<Key, Value>,
 }
 impl<Key, Value> SlhaBlock<Error> for Block<Key, Value>
@@ -463,10 +739,102 @@ where
     Ok((key, value))
 }
 
+/// `BlockStr` is a more flexible but less typesafe version of `Block`.
+///
+/// It represents a block from an SLHA file as a map from a vector of string keys to a value.
+/// This type of `Block` can still be used even if only the output type is known at compile time while the
+/// key types (and the number of keys) are only known at runtime.
+/// This is for example the case when working with the `UFO` format, where each external parameter contains a block name in an SLHA file and
+/// the keys into the block in string form.
+///
+/// The split between value and key is such that the value is the longest expression at the end of
+/// of a line that can be parsed to the `Value` type, and everything before, split at whitespace,
+/// is used as the key.
+/// For example, the line
+///
+/// ```none
+/// 1 this    5   bar   7.3 3
+/// ```
+///
+/// would be split into `vec!["1", "this", "5", "bar"]` and `(7.3, 3.0)` if `Value` = `(f64, f64)`
+/// or `vec!["1", "this", "5", "bar", "7.3"]` and `3` if `Value` = `i8`.
+///
+///
+/// # Example
+///
+/// ```rust
+/// use slha::{Slha, BlockStr};
+/// # fn main() {
+/// let input = "\
+/// BLOCK TEST
+///    1 3
+///    4 6
+/// block Mass
+///    6  173.2
+/// BloCk FooBar
+///    1 2 3 4 0.5
+///    1 assdf 3 4 8
+///    1 2 4 8.98
+/// ";
+/// let slha = Slha::parse(input).unwrap();
+///
+/// let test: BlockStr<i64> = match slha.get_block("test") {
+///     Some(block) => match block {
+///         Ok(test) => test,
+///         Err(err) => panic!("There was a parse error while parsing block 'test': {}", err),
+///     },
+///     None => panic!("Missing block 'test'"),
+/// };
+/// assert_eq!(test.map.len(), 2);
+/// assert_eq!(test.map[&vec!["1".to_string()]], 3);
+/// assert_eq!(test.map[&vec!["4".to_string()]], 6);
+///
+/// let mass: BlockStr<(i64, f64)> = match slha.get_block("mass") {
+///     Some(block) => match block {
+///         Ok(mass) => mass,
+///         Err(err) => panic!("There was a parse error while parsing block 'mass': {}", err),
+///     },
+///     None => panic!("Missing block 'mass'"),
+/// };
+/// assert_eq!(mass.map.len(), 1);
+/// assert_eq!(mass.map[&Vec::new()], (6, 173.2));
+///
+/// let foobar: BlockStr<f64> = match slha.get_block("foobar") {
+///     Some(block) => match block {
+///         Ok(foobar) => foobar,
+///         Err(err) => panic!("There was a parse error while parsing block 'foobar': {}", err),
+///     },
+///     None => panic!("Missing block 'foobar'"),
+/// };
+/// assert_eq!(foobar.map.len(), 3);
+/// assert_eq!(
+///     foobar.map[&vec![
+///         "1".to_string(),
+///         "2".to_string(),
+///         "3".to_string(),
+///         "4".to_string(),
+///     ]],
+///     0.5
+/// );
+/// assert_eq!(
+///     foobar.map[&vec![
+///         "1".to_string(),
+///         "assdf".to_string(),
+///         "3".to_string(),
+///         "4".to_string(),
+///     ]],
+///     8.
+///     );
+/// assert_eq!(
+///     foobar.map[&vec!["1".to_string(), "2".to_string(), "4".to_string()]],
+///     8.98
+/// );
+/// # }
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlockStr<Value> {
-    scale: Option<f64>,
-    map: HashMap<Vec<String>, Value>,
+    pub scale: Option<f64>,
+    pub map: HashMap<Vec<String>, Value>,
 }
 impl<Value> SlhaBlock<Error> for BlockStr<Value>
 where
@@ -503,6 +871,78 @@ where
     Ok((keys, val.expect("BUG: This should be impossible.")))
 }
 
+/// A block type that only contains a single value.
+///
+/// This type of block does not represent a map like `Block` but just a single value and an
+/// optional scale.
+/// This is the second type necessary to cover all blocks defined in the SLHA 1 and 2 papers.
+///
+/// # Reading blocks
+///
+/// `BlockSingle` implements the `SlhaBlock` trait and therefore can be read from an SLHA file.
+/// This can be done in two different ways, the recommended way using `slha-derive` or using an
+/// `Slha` object.
+///
+/// ## Using derive
+///
+/// The easiest way to read an SLHA file is to automatically derive the `SlhaDerive` trait on  a
+/// struct.
+///
+/// ```rust
+/// # extern crate slha;
+/// # #[macro_use]
+/// # extern crate slha_derive;
+/// #
+/// # use slha::{BlockSingle, SlhaDeserialize};
+/// #
+/// #[derive(Debug, SlhaDeserialize)]
+/// struct Slha {
+///     alpha: BlockSingle<f64>,
+/// }
+/// #
+/// # fn main() {
+/// let input = "
+/// BLOCK ALPHA   # Effective Higgs mixing parameter
+///      -1.13716828e-01   # alpha
+/// ";
+///
+/// let slha = Slha::deserialize(input).unwrap();
+/// let alpha = slha.alpha;
+/// assert_eq!(alpha.scale, None);
+/// assert_eq!(alpha.value, -1.13716828e-01);
+/// # }
+/// ```
+///
+///
+/// ## Using an `Slha` object
+///
+/// Using an `Slha` object to parse an SLHA file is less convenient than using the `SlhaDerive`
+/// trait, but more flexible.
+/// See the crate level documentation for more information.
+///
+/// ```rust
+/// # extern crate slha;
+/// #
+/// # use slha::{Slha, BlockSingle, SlhaDeserialize};
+/// #
+/// # fn main() {
+/// let input = "
+/// BLOCK ALPHA   # Effective Higgs mixing parameter
+///      -1.13716828e-01   # alpha
+/// ";
+///
+/// let slha = Slha::parse(input).unwrap();
+/// let alpha: BlockSingle<f64> = match slha.get_block("alpha") {
+///     Some(block) => match block {
+///         Ok(alpha) => alpha,
+///         Err(err) => panic!("Parse error while parsing block 'alpha': {}", err),
+///     },
+///     None => panic!("Missing block 'alpha'"),
+/// };
+/// assert_eq!(alpha.scale, None);
+/// assert_eq!(alpha.value, -1.13716828e-01);
+/// # }
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct BlockSingle<Value> {
     pub value: Value,
@@ -524,15 +964,99 @@ where
     }
 }
 
+/// The decay table of a particle.
+///
+/// The decay table as read from an SLHA file.
+///
+/// # Reading the decay table.
+///
+/// The `DecayTables` can be read from an SLHA file in two different ways, the recommended way using
+/// `slha-derive` or using an `Slha` object.
+///
+/// ## Using derive
+///
+/// The easiest way to read an SLHA file is to automatically derive the `SlhaDerive` trait on  a
+/// struct.
+/// To also include decays in the struct add a field named `decays`.
+/// This field must have a type of `HashMap<i64, DecayTable>`.
+///
+/// ```rust
+/// extern crate slha;
+/// #[macro_use]
+/// extern crate slha_derive;
+/// extern crate error_chain;
+///
+/// use slha::{DecayTable, SlhaDeserialize};
+/// use error_chain::ChainedError;
+/// use std::collections::HashMap;
+///
+/// #[derive(SlhaDeserialize)]
+/// struct Slha {
+///     decays: HashMap<i64, DecayTable>,
+/// }
+///
+/// fn main() {
+///     let input = "\
+/// DECAY 6 1.35
+///     1   2   5   24
+///     ";
+///
+///     let slha = match Slha::deserialize(input) {
+///         Ok(slha) => slha,
+///         Err(err) => panic!("Failed to deserialize SLHA file:\n{}", err.display_chain()),
+///     };
+///     let decays = &slha.decays;
+///     assert_eq!(decays.len(), 1);
+///     assert_eq!(decays[&6].width, 1.35);
+///     let decay = &decays[&6].decays;
+///     assert_eq!(decay.len(), 1);
+///     assert_eq!(decay[0].branching_ratio, 1.);
+///     assert_eq!(decay[0].daughters, vec![5, 24]);
+/// }
+/// ```
+///
+/// ## Using an `Slha` object
+///
+/// Using an `Slha` object to parse an SLHA file is less convenient than using the `SlhaDerive`
+/// trait, but more flexible.
+/// See the crate level documentation for more information.
+///
+/// ```rust
+/// use slha::{Slha, DecayTable};
+///
+/// let input = "\
+/// DECAY 6 1.35
+///     1   2   5   24
+/// ";
+///
+/// let slha = match Slha::parse(input) {
+///     Ok(slha) => slha,
+///     Err(err) => panic!("Failed to deserialize SLHA file: {}", err),
+/// };
+/// let decay_table = match slha.get_decay(6) {
+///     Some(dec) => dec,
+///     None => panic!("Missing decay table for the top quark."),
+/// };
+/// assert_eq!(decay_table.width, 1.35);
+/// let decay = &decay_table.decays;
+/// assert_eq!(decay.len(), 1);
+/// assert_eq!(decay[0].branching_ratio, 1.);
+/// assert_eq!(decay[0].daughters, vec![5, 24]);
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecayTable {
+    /// The width of the particle.
     pub width: f64,
+    /// All decay modes of the particle.
     pub decays: Vec<Decay>,
 }
 
+/// A single decay mode of a particle.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Decay {
+    /// The branching ratio of this decay mode.
     pub branching_ratio: f64,
+    /// A vector of all daughter particles.
     pub daughters: Vec<i64>,
 }
 
@@ -559,7 +1083,178 @@ impl<'a> RawBlock<'a> {
     }
 }
 
-/// An SLHA file.
+/// A partially parsed SLHA file.
+///
+/// `Slha` objects are another way to parse SLHA files without using the `SlhaDeserialize` trait.
+/// The advantage that using an `SLHA` object has over deriving `SlhaDeserialize` for a struct is
+/// that the names of the blocks and their types do not have to be known at compile time.
+/// This is useful in a few special cases, for exmaple when dealing with the `UFO` format, where every
+/// external parameter comes with the name of an SLHA block and a string containing the keys where
+/// to find the value for this parameter in an SLHA file.
+/// Since the blocks and their types are only known when reading the model file, the
+/// `SlhaDeserialize` approach cannot be used.
+///
+/// The `Slha` object uses a two step parsing approach, because the types of Blocks aren't known
+/// when reading the file and the SLHA format isn't self describing so that the information can not
+/// be extracted from there.
+/// Therefore the `parse` function will extract all blocks (and decays) but only parses the headers
+/// of the blocks and stores their bodies.
+/// The various `get_block` functions then parse the body of the block into the desired type 'on
+/// demand' when accessing a block.
+///
+/// The `get_block` methods can parse a block into any type that implements the `SlhaBlock` trait,
+/// which include `Block` (if both key and value type are known) and `BlockStr` (if only the value
+/// type is known).
+/// If even the value type is unknown at compile time, the `get_raw_block` methods can be used which
+/// return the raw block body read from the file.
+///
+/// # Example
+///
+/// The following example shows all three ways how to access a block, as well as how to access the
+/// decay table for a given particle.
+///
+/// First, extract all blocks and decays into an `Slha` object:
+///
+/// ```rust
+/// use slha::{Slha, Block, BlockStr, DecayTable};
+///
+/// let input = "\
+/// Block SMINPUTS   # Standard Model inputs
+///      3      0.1172  # alpha_s(MZ) SM MSbar
+///      5      4.25    # Mb(mb) SM MSbar
+///      6    174.3     # Mtop(pole)
+/// DECAY 6 1.35
+///     1   2   5   24
+/// ";
+///
+/// let slha = match Slha::parse(input) {
+///     Ok(slha) => slha,
+///     Err(err) => panic!("Failed to deserialize SLHA file: {}", err),
+/// };
+/// ```
+///
+/// If both the value type and the key type are known, blocks can be extracted into a `Block`
+/// structure:
+///
+/// ```rust
+/// # use slha::{Slha, Block, BlockStr, DecayTable};
+/// #
+/// # let input = "\
+/// # Block SMINPUTS   # Standard Model inputs
+/// #      3      0.1172  # alpha_s(MZ) SM MSbar
+/// #      5      4.25    # Mb(mb) SM MSbar
+/// #      6    174.3     # Mtop(pole)
+/// # DECAY 6 1.35
+/// #     1   2   5   24
+/// # ";
+/// #
+/// # let slha = match Slha::parse(input) {
+/// #     Ok(slha) => slha,
+/// #     Err(err) => panic!("Failed to deserialize SLHA file: {}", err),
+/// # };
+/// #
+/// let sminputs: Block<i8, f64> = match slha.get_block("sminputs") {
+///     Some(block) => match block {
+///         Ok(sminputs) => sminputs,
+///         Err(err) => panic!("Failed to parse block 'smimputs':\n{}", err),
+///     },
+///     None => panic!("Missing block 'sminputs'."),
+/// };
+/// assert_eq!(sminputs.scale, None);
+/// assert_eq!(sminputs.map.len(), 3);
+/// assert_eq!(sminputs.map[&5], 4.25);
+/// ```
+///
+/// If only the value type is known but the key type is not, then it is still possible to use a
+/// `BlockStr` to extract the block and access the values using string keys:
+///
+/// ```rust
+/// # use slha::{Slha, Block, BlockStr, DecayTable};
+/// #
+/// # let input = "\
+/// # Block SMINPUTS   # Standard Model inputs
+/// #      3      0.1172  # alpha_s(MZ) SM MSbar
+/// #      5      4.25    # Mb(mb) SM MSbar
+/// #      6    174.3     # Mtop(pole)
+/// # DECAY 6 1.35
+/// #     1   2   5   24
+/// # ";
+/// #
+/// # let slha = match Slha::parse(input) {
+/// #     Ok(slha) => slha,
+/// #     Err(err) => panic!("Failed to deserialize SLHA file: {}", err),
+/// # };
+/// #
+/// let sminputs: BlockStr<f64> = match slha.get_block("sminputs") {
+///     Some(block) => match block {
+///         Ok(sminputs) => sminputs,
+///         Err(err) => panic!("Failed to parse block 'smimputs':\n{}", err),
+///     },
+///     None => panic!("Missing block 'sminputs'."),
+/// };
+/// assert_eq!(sminputs.scale, None);
+/// assert_eq!(sminputs.map.len(), 3);
+/// assert_eq!(sminputs.map[&vec!["5".to_string()]], 4.25);
+/// ```
+///
+/// If even the value type is not known, it is at least still possible to access the raw data lines
+/// of the block:
+///
+/// ```rust
+/// # use slha::{Slha, Block, BlockStr, DecayTable};
+/// #
+/// # let input = "\
+/// # Block SMINPUTS   # Standard Model inputs
+/// #      3      0.1172  # alpha_s(MZ) SM MSbar
+/// #      5      4.25    # Mb(mb) SM MSbar
+/// #      6    174.3     # Mtop(pole)
+/// # DECAY 6 1.35
+/// #     1   2   5   24
+/// # ";
+/// #
+/// # let slha = match Slha::parse(input) {
+/// #     Ok(slha) => slha,
+/// #     Err(err) => panic!("Failed to deserialize SLHA file: {}", err),
+/// # };
+/// #
+/// let blocks = slha.get_raw_blocks("sminputs");
+/// assert_eq!(blocks.len(), 1);
+/// let sminputs = &blocks[0];
+/// assert_eq!(sminputs.scale, None);
+/// assert_eq!(sminputs.lines.len(), 3);
+/// assert_eq!(sminputs.lines[1].data, "5      4.25    ");
+/// assert_eq!(sminputs.lines[1].comment, Some("# Mb(mb) SM MSbar"));
+/// ```
+///
+/// Access the decays using `get_decay`:
+///
+/// ```rust
+/// # use slha::{Slha, DecayTable};
+/// #
+/// # let input = "\
+/// # Block SMINPUTS   # Standard Model inputs
+/// #      3      0.1172  # alpha_s(MZ) SM MSbar
+/// #      5      4.25    # Mb(mb) SM MSbar
+/// #      6    174.3     # Mtop(pole)
+/// # DECAY 6 1.35
+/// #     1   2   5   24
+/// # ";
+/// #
+/// # let slha = match Slha::parse(input) {
+/// #     Ok(slha) => slha,
+/// #     Err(err) => panic!("Failed to deserialize SLHA file: {}", err),
+/// # };
+/// #
+/// let decay_table = match slha.get_decay(6) {
+///     Some(dec) => dec,
+///     None => panic!("Missing decay table for the top quark."),
+/// };
+/// assert_eq!(decay_table.width, 1.35);
+/// let decay = &decay_table.decays;
+/// assert_eq!(decay.len(), 1);
+/// assert_eq!(decay[0].branching_ratio, 1.);
+/// assert_eq!(decay[0].daughters, vec![5, 24]);
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Slha<'a> {
     blocks: HashMap<String, Vec<RawBlock<'a>>>,
