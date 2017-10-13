@@ -1486,6 +1486,32 @@ Block MODsel  # SUSY breaking input parameters
     }
 
     #[test]
+    fn test_duplicate_block_unchecked() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MODsel  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+        let slha = Slha::parse(input).unwrap();
+        let blocks: Vec<Block<i8, f64>> = slha.get_blocks_unchecked("modsel").unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].map[&1], 1.0);
+        assert_eq!(blocks[1].map[&1], 100.0);
+    }
+
+    #[test]
     fn test_duplicate_block_scale() {
         // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
         let input = "\
@@ -1509,6 +1535,31 @@ Block flup Q= 4.64649125e+03
         } else {
             panic!("Wrong error variant {:?} instead of DuplicateBlock", err);
         }
+    }
+
+    #[test]
+    fn test_duplicate_block_scale_unchecked() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yu Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yu Q= 8
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+        3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let slha = Slha::parse(input).unwrap();
+        let blocks: Vec<Block<(i8, i8), f64>> = slha.get_blocks_unchecked("yu").unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].scale, Some(4.64649125e+02));
+        assert_eq!(blocks[0].map[&(3, 3)], 8.88193465e-01);
+        assert_eq!(blocks[1].scale, Some(8.));
+        assert_eq!(blocks[1].map[&(3, 3)], 1.4e-01);
     }
 
     #[test]
@@ -1542,6 +1593,31 @@ Block flup Q= 4.64649125e+03
     }
 
     #[test]
+    fn test_duplicate_block_equal_scale_unchecked() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yf Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yu Q= 8
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let slha = Slha::parse(input).unwrap();
+        let blocks: Vec<Block<(i8, i8), f64>> = slha.get_blocks_unchecked("yf").unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].scale, Some(4.64649125e+02));
+        assert_eq!(blocks[0].map[&(3, 3)], 8.88193465e-01);
+        assert_eq!(blocks[1].scale, Some(4.64649125e+02));
+        assert_eq!(blocks[1].map[&(3, 3)], 9.97405356e-02);
+    }
+
+    #[test]
     fn test_redefined_block_with_scale_1() {
         // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
         let input = "\
@@ -1571,6 +1647,31 @@ Block flup Q= 4.64649125e+03
     }
 
     #[test]
+    fn test_redefined_block_with_scale_1_unchecked() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yf
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yu Q= 8
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf Q= 4.64649125e+02
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let slha = Slha::parse(input).unwrap();
+        let blocks: Vec<Block<(i8, i8), f64>> = slha.get_blocks_unchecked("yf").unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].scale, None);
+        assert_eq!(blocks[0].map[&(3, 3)], 8.88193465e-01);
+        assert_eq!(blocks[1].scale, Some(4.64649125e+02));
+        assert_eq!(blocks[1].map[&(3, 3)], 9.97405356e-02);
+    }
+
+    #[test]
     fn test_redefined_block_with_scale_2() {
         // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
         let input = "\
@@ -1597,6 +1698,31 @@ Block flup Q= 4.64649125e+03
                 err
             );
         }
+    }
+
+    #[test]
+    fn test_redefined_block_with_scale_2_unchecked() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+Block yf Q= 4.64649125e+02
+    3  3 8.88193465e-01   # Yt(Q)MSSM DRbar
+Block yu Q= 8
+    3  3 1.4e-01
+Block yd Q= 50
+    3  3 1.4e-01
+Block yf
+    3  3 9.97405356e-02   # Ytau(Q)MSSM DRbar
+Block flup Q= 4.64649125e+03
+    3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
+         ";
+
+        let slha = Slha::parse(input).unwrap();
+        let blocks: Vec<Block<(i8, i8), f64>> = slha.get_blocks_unchecked("yf").unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].scale, Some(4.64649125e+02));
+        assert_eq!(blocks[0].map[&(3, 3)], 8.88193465e-01);
+        assert_eq!(blocks[1].scale, None);
+        assert_eq!(blocks[1].map[&(3, 3)], 9.97405356e-02);
     }
 
     #[test]
