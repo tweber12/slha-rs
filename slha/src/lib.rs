@@ -365,49 +365,23 @@ pub struct Line<'input> {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum BlockScale<'a> {
-    WithScale(Vec<(f64, Vec<Line<'a>>)>),
-    WithoutScale(Vec<Line<'a>>),
+pub struct RawBlock<'a> {
+    scale: Option<f64>,
+    lines: Vec<Line<'a>>,
 }
-impl<'a> BlockScale<'a> {
-    fn to_block<B>(&self, name: String) -> Result<B>
+impl<'a> RawBlock<'a> {
+    pub fn to_block<B>(&self, name: &str) -> Result<B>
     where
         B: SlhaBlock<Error>,
     {
-        let (lines, scale) = match *self {
-            BlockScale::WithoutScale(ref lines) => (lines, None),
-            BlockScale::WithScale(ref vec) => {
-                if vec.len() > 1 {
-                    bail!(ErrorKind::DuplicateBlock(name));
-                }
-                let (scale, ref lines) = vec[0];
-                (lines, Some(scale))
-            }
-        };
-        B::parse(lines, scale).chain_err(|| ErrorKind::InvalidBlock(name))
-    }
-
-    fn to_blocks<B>(&self, name: String) -> Result<Vec<B>>
-    where
-        B: SlhaBlock<Error>,
-    {
-        let blocks = match *self {
-            BlockScale::WithoutScale(ref lines) => B::parse(lines, None).map(|b| vec![b]),
-            BlockScale::WithScale(ref vec) => {
-                vec.iter()
-                    .map(|&(scale, ref lines)| B::parse(lines, Some(scale)))
-                    .collect()
-            }
-        };
-        blocks.chain_err(|| ErrorKind::InvalidBlock(name))
+        B::parse(&self.lines, self.scale).chain_err(|| ErrorKind::InvalidBlock(name.to_string()))
     }
 }
-
 
 /// An SLHA file.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Slha<'a> {
-    blocks: HashMap<String, BlockScale<'a>>,
+    blocks: HashMap<String, Vec<RawBlock<'a>>>,
     decays: HashMap<i64, DecayTable>,
 }
 impl<'a> Slha<'a> {
@@ -420,7 +394,13 @@ impl<'a> Slha<'a> {
         let mut lines = input.lines().peekable();
         while let Some(segment) = internal::parse_segment(&mut lines) {
             match segment? {
-                Segment::Block { name, block, scale } => slha.insert_block(name, block, scale)?,
+                Segment::Block { name, block, scale } => {
+                    let mut blocks = slha.blocks.entry(name).or_insert_with(|| Vec::new());
+                    blocks.push(RawBlock {
+                        lines: block,
+                        scale,
+                    })
+                }
                 Segment::Decay {
                     pdg_id,
                     width,
@@ -434,67 +414,48 @@ impl<'a> Slha<'a> {
     /// Lookup a block.
     pub fn get_block<B: SlhaBlock<Error>>(&self, name: &str) -> Option<Result<B>> {
         let name = name.to_lowercase();
-        let block = match self.blocks.get(&name) {
-            Some(lines) => lines,
+        let blocks = match self.blocks.get(&name) {
+            Some(blocks) => blocks,
             None => return None,
         };
-        Some(block.to_block(name))
+        if blocks.len() > 1 {
+            return Some(Err(ErrorKind::DuplicateBlock(name).into()));
+        }
+        Some(blocks[0].to_block(&name))
     }
 
     /// Lookup a block.
     pub fn get_blocks<B: SlhaBlock<Error>>(&self, name: &str) -> Result<Vec<B>> {
+        let blocks: Vec<B> = self.get_blocks_unchecked(name)?;
+        let mut no_scale = false;
+        let mut seen_scales = Vec::new();
+        for block in &blocks {
+            match block.scale() {
+                Some(scale) => seen_scales.push(scale),
+                None => no_scale = true,
+            }
+        }
+        if no_scale && !seen_scales.is_empty() {
+            bail!(ErrorKind::RedefinedBlockWithQ(name.to_lowercase()));
+        }
+        if let Some(scale) = find_duplicates(seen_scales) {
+            bail!(ErrorKind::DuplicateBlockScale(name.to_lowercase(), scale));
+        }
+        Ok(blocks)
+    }
+
+    /// Lookup a block.
+    pub fn get_blocks_unchecked<B: SlhaBlock<Error>>(&self, name: &str) -> Result<Vec<B>> {
         let name = name.to_lowercase();
-        let block = match self.blocks.get(&name) {
-            Some(lines) => lines,
+        let blocks = match self.blocks.get(&name) {
+            Some(blocks) => blocks,
             None => return Ok(Vec::new()),
         };
-        block.to_blocks(name)
+        blocks.iter().map(|block| block.to_block(&name)).collect()
     }
 
     pub fn get_decay(&self, pdg_id: i64) -> Option<&DecayTable> {
         self.decays.get(&pdg_id)
-    }
-
-    fn insert_block(
-        &mut self,
-        name: String,
-        block: Vec<Line<'a>>,
-        scale: Option<f64>,
-    ) -> Result<()> {
-        if let Some(scale) = scale {
-            self.insert_block_scale(name, block, scale)
-        } else {
-            self.insert_block_noscale(name, block)
-        }
-    }
-
-    fn insert_block_noscale(&mut self, name: String, block: Vec<Line<'a>>) -> Result<()> {
-        if let Some(block) = self.blocks.get(&name) {
-            if let BlockScale::WithScale(..) = *block {
-                bail!(ErrorKind::RedefinedBlockWithQ(name));
-            } else {
-                bail!(ErrorKind::DuplicateBlock(name));
-            }
-        }
-        self.blocks.insert(name, BlockScale::WithoutScale(block));
-        Ok(())
-    }
-
-    fn insert_block_scale(&mut self, name: String, block: Vec<Line<'a>>, scale: f64) -> Result<()> {
-        let entry = self.blocks.entry(name.clone()).or_insert_with(|| {
-            BlockScale::WithScale(Vec::new())
-        });
-        match *entry {
-            BlockScale::WithoutScale(_) => bail!(ErrorKind::RedefinedBlockWithQ(name)),
-            BlockScale::WithScale(ref mut blocks) => {
-                if blocks.iter().find(|&&(s, _)| s == scale).is_some() {
-                    bail!(ErrorKind::DuplicateBlockScale(name, scale));
-                } else {
-                    blocks.push((scale, block));
-                }
-            }
-        };
-        Ok(())
     }
 
     fn insert_decay(&mut self, pdg_id: i64, width: f64, decays: Vec<Decay>) -> Result<()> {
@@ -504,6 +465,19 @@ impl<'a> Slha<'a> {
         self.decays.insert(pdg_id, DecayTable { width, decays });
         Ok(())
     }
+}
+
+fn find_duplicates<T: Clone + PartialOrd>(mut list: Vec<T>) -> Option<T> {
+    if list.len() < 2 {
+        return None;
+    }
+    list.sort_unstable_by(|e1, e2| e1.partial_cmp(e2).unwrap());
+    for (e1, e2) in list.iter().zip(list.iter().skip(1)) {
+        if e1 == e2 {
+            return Some(e1.clone());
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -1501,7 +1475,9 @@ Block MODsel  # SUSY breaking input parameters
      2    250.0     # m12
      5   -100.0     # A0 ";
 
-        let err = Slha::parse(input).unwrap_err();
+        let slha = Slha::parse(input).unwrap();
+        let err: Result<Block<i8, f64>, Error> = slha.get_block("modsel").unwrap();
+        let err = err.unwrap_err();
         if let Error(ErrorKind::DuplicateBlock(name), _) = err {
             assert_eq!(&name, "modsel");
         } else {
@@ -1551,7 +1527,9 @@ Block flup Q= 4.64649125e+03
     3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
          ";
 
-        let err = Slha::parse(input).unwrap_err();
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Vec<Block<(i8, i8), f64>>, Error> = slha.get_blocks("yf");
+        let err = block.unwrap_err();
         if let Error(ErrorKind::DuplicateBlockScale(name, scale), _) = err {
             assert_eq!(&name, "yf");
             assert_eq!(scale, 4.64649125e+02);
@@ -1579,12 +1557,14 @@ Block flup Q= 4.64649125e+03
     3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
          ";
 
-        let err = Slha::parse(input).unwrap_err();
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Vec<Block<(i8, i8), f64>>, Error> = slha.get_blocks("yf");
+        let err = block.unwrap_err();
         if let Error(ErrorKind::RedefinedBlockWithQ(name), _) = err {
             assert_eq!(&name, "yf");
         } else {
             panic!(
-                "Wrong error variant {:?} instead of DuplicateBlockWithQ",
+                "Wrong error variant {:?} instead of RedefinedBlockWithQ",
                 err
             );
         }
@@ -1606,12 +1586,14 @@ Block flup Q= 4.64649125e+03
         3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
          ";
 
-        let err = Slha::parse(input).unwrap_err();
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Vec<Block<(i8, i8), f64>>, Error> = slha.get_blocks("yf");
+        let err = block.unwrap_err();
         if let Error(ErrorKind::RedefinedBlockWithQ(name), _) = err {
             assert_eq!(&name, "yf");
         } else {
             panic!(
-                "Wrong error variant {:?} instead of DuplicateBlockWithQ",
+                "Wrong error variant {:?} instead of RedefinedBlockWithQ",
                 err
             );
         }
