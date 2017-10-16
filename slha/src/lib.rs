@@ -374,8 +374,8 @@ pub struct Line<'input> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RawBlock<'a> {
-    scale: Option<f64>,
-    lines: Vec<Line<'a>>,
+    pub scale: Option<f64>,
+    pub lines: Vec<Line<'a>>,
 }
 impl<'a> RawBlock<'a> {
     pub fn to_block<B>(&self, name: &str) -> Result<B>
@@ -462,11 +462,11 @@ impl<'a> Slha<'a> {
         blocks.iter().map(|block| block.to_block(&name)).collect()
     }
 
-    pub fn get_raw_blocks<'s>(&'s self, name: &str) -> Option<&'s [RawBlock<'a>]> {
+    pub fn get_raw_blocks<'s>(&'s self, name: &str) -> &'s [RawBlock<'a>] {
         let name = name.to_lowercase();
         match self.blocks.get(&name) {
-            Some(blocks) => Some(&blocks),
-            None => None,
+            Some(blocks) => &blocks,
+            None => &[],
         }
     }
 
@@ -498,7 +498,7 @@ fn find_duplicates<T: Clone + PartialOrd>(mut list: Vec<T>) -> Option<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Slha, Block, BlockSingle, BlockStr, RawBlock, Parseable, ParseResult, Decay, Line};
+    use super::{Slha, Block, BlockSingle, BlockStr, Parseable, ParseResult, Decay, Line};
     use super::errors::{Error, ErrorKind};
 
     #[test]
@@ -556,7 +556,9 @@ block Mass
   ";
         let slha = Slha::parse(input).unwrap();
         println!("{:?}", slha);
-        let blocks: &[RawBlock] = slha.get_raw_blocks("test").unwrap();
+        let blocks = slha.get_raw_blocks("foo");
+        assert_eq!(blocks.len(), 0);
+        let blocks = slha.get_raw_blocks("test");
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].lines.len(), 2);
         assert_eq!(
@@ -573,7 +575,7 @@ block Mass
                 comment: None,
             }
         );
-        let blocks: &[RawBlock] = slha.get_raw_blocks("mass").unwrap();
+        let blocks = slha.get_raw_blocks("mass");
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].lines.len(), 1);
         assert_eq!(
@@ -642,7 +644,7 @@ block Mass # Why not split the masses?
 ";
         let slha = Slha::parse(input).unwrap();
         println!("{:?}", slha);
-        let blocks: &[RawBlock] = slha.get_raw_blocks("test").unwrap();
+        let blocks = slha.get_raw_blocks("test");
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].lines.len(), 2);
         assert_eq!(
@@ -659,7 +661,7 @@ block Mass # Why not split the masses?
                 comment: Some("# Testcase number two"),
             }
         );
-        let blocks: &[RawBlock] = slha.get_raw_blocks("mass").unwrap();
+        let blocks = slha.get_raw_blocks("mass");
         assert_eq!(blocks.len(), 2);
         assert_eq!(blocks[0].lines.len(), 1);
         assert_eq!(
