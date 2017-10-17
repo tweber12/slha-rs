@@ -1,0 +1,16 @@
+cache: cargo
+
+language: rust
+rust:
+  - stable
+  - beta
+  - nightly
+
+matrix:
+  allow_failures:
+    - rust: nightly
+
+script:
+  cd slha; cargo build --release
+  cd slha; cargo test --release
+  cd slha-test; cargo test --release
