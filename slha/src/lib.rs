@@ -6,22 +6,24 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! A crate to read SUSY Les Houches Accord (or SLHA) files.
+//! A crate to read [SUSY Les Houches Accord] (or SLHA) files.
 //!
 //! This crate aims to be as general as possible, in the sense that Blocks of arbitrary types are
 //! supported.
-//! In particular, all the Blocks defined in the SLHA 1 and 2 standards can be read using this
+//! In particular, all the Blocks defined in the SLHA [1] and [2] standards can be read using this
 //! crate.
 //!
-//! There are two ways to use this crate, using `derive` or a runtime parse.
-//! Using `derive` is the recommended way to use this library, and the `runtime` parser should
-//! only be used if `derive` can not be used, most notably in the case when the necessary Blocks
-//! are only known at runtime.
+//! There are two ways to use this crate, using the (automatically derivable) [`SlhaDeserialize`]
+//! trait or using an [`Slha`] object.
+//! Automatically deriving `SlhaDeserialize` is the recommended way to use this library, and the
+//! `Slha` object approach should only be used if the other can not be used, most notably in the
+//! case when the necessary Blocks are only known at runtime.
 //!
 //! # Usage example
 //!
-//! The following is a full example using the `derive` method to extract blocks and decays from an
-//! SLHA file. An example using the `runtime` method can be found in the `The runtime parser`
+//! The following is a full example using the `SlhaDeserialize` method to extract blocks and decays
+//! from an SLHA file. An example using the `Slha` object method can be found in the
+//! [`Using an Slha object`] section.
 //! section.
 //! To be able to use this example, you will have to add
 //!
@@ -66,17 +68,20 @@
 //!    1  2   5  24  # t > W+ b
 //! ";
 //!
-//!     match Slha::deserialize(input) {
-//!         Ok(slha) => {
-//!             assert_eq!(slha.mass.map[&6], 173.2);
-//!             assert_eq!(slha.mass.scale, None);
-//!             assert_eq!(slha.ye.len(), 2);
-//!             assert_eq!(slha.ye[0].scale, Some(1.));
-//!             assert_eq!(slha.ye[1].map[&(3,3)], 8.4);
-//!             assert_eq!(slha.decays[&6].width, 1.35);
-//!         }
-//!         Err(err) => eprintln!("{}", err.display_chain()),
-//!     }
+//!     let slha = match Slha::deserialize(input) {
+//!         Ok(slha) => slha,
+//!         Err(err) => {
+//!             eprintln!("{}", err.display_chain());
+//!             return;
+//!         },
+//!     };
+//!
+//!     assert_eq!(slha.mass.map[&6], 173.2);
+//!     assert_eq!(slha.mass.scale, None);
+//!     assert_eq!(slha.ye.len(), 2);
+//!     assert_eq!(slha.ye[0].scale, Some(1.));
+//!     assert_eq!(slha.ye[1].map[&(3,3)], 8.4);
+//!     assert_eq!(slha.decays[&6].width, 1.35);
 //! }
 //! ```
 //!
@@ -91,16 +96,56 @@
 //! (case-insensitive) name as the field. The block-name that should be deserialized into a field
 //! can be customized using the `rename` attribute.
 //!
-//! While the fields can be of any type that implements the `SlhaBlock` trait, the most common blocks,
-//! including all blocks defined in the SLHA 1 and 2 papers, can be expressed using two block types
-//! defined in this crate, `Block` and `BlockSingle`.
+//! While the fields can be of any type that implements the [`SlhaBlock`] trait, the most common
+//! blocks, including all blocks defined in the SLHA 1 and 2 papers, can be expressed using two
+//! block types defined in this crate, [`Block`] and [`BlockSingle`].
 //!
-//! All blocks defined this way by the struct must be present in the SLHA file, or an error is
+//! All blocks declared in the struct must be present in the SLHA file, or an error is
 //! returned.
 //! Blocks that are included in the SLHA file but not in the struct are ignored.
 //! Therefore it is possible to pick and choose the blocks that are necessary for a task without
 //! having to include (and know the types of) all the others.
 //!
+//! ```rust
+//! # extern crate slha;
+//! # #[macro_use]
+//! # extern crate slha_derive;
+//! #
+//! # use slha::{SlhaDeserialize, Block, BlockSingle};
+//! #
+//! #[derive(Debug, SlhaDeserialize)]
+//! struct Slha {
+//!     alpha: BlockSingle<f64>,
+//!     mass: Block<i64, f64>,
+//!     ye: Block<(u8, u8), f64>,
+//! }
+//! #
+//! # fn main() {
+//! let input = "
+//! BLOCK MASS
+//!    6    173.2    # M_t
+//! BLOCK ye Q= 1
+//!    3   3    4.2
+//! BLOCK ALPHA   # Effective Higgs mixing parameter
+//!      -1.1e-01   # alpha
+//! ";
+//!
+//! let slha = Slha::deserialize(input).unwrap();
+//! let mass = slha.mass;
+//! assert_eq!(mass.scale, None);
+//! assert_eq!(mass.map.len(), 1);
+//! assert_eq!(mass.map[&6], 173.2);
+//!
+//! let ye = slha.ye;
+//! assert_eq!(ye.scale, Some(1.));
+//! assert_eq!(ye.map.len(), 1);
+//! assert_eq!(ye.map[&(3, 3)], 4.2);
+//!
+//! let alpha = slha.alpha;
+//! assert_eq!(alpha.scale, None);
+//! assert_eq!(alpha.value, -1.1e-1);
+//! # }
+//! ```
 //!
 //! ### Optional blocks
 //!
@@ -181,9 +226,9 @@
 //! ## Decays
 //!
 //! Decays can be read in as well.
-//! For this a field with name `decays` and type `HashMap<i64, DecayTable>` has to be present in
+//! For this a field with name `decays` and type `HashMap<i64, [`DecayTable`]>` has to be present in
 //! the struct.
-//! The `decays` field then contains a map from the pdg_id of the decaying particle to the
+//! The `decays` field then contains a map from the pdg id of the decaying particle to the
 //! `DecayTable` of the particle.
 //! An error is returned if there are multiple decay tables for the same particle.
 //!
@@ -214,6 +259,157 @@
 //! assert_eq!(decays[0].daughters, vec![5, 24]);
 //! # }
 //! ```
+//!
+//!
+//! # Using an `Slha` object
+//!
+//! Sometimes using the [`SlhaDeserialize`] trait is not an option, usually if the names and/or
+//! types of the blocks in the SLHA file are not known at compile time.
+//! In these cases blocks from the SLHA file can still be accessed using an [`Slha`] object, which
+//! allows to access blocks by name with names that are only known at run time.
+//!
+//!
+//! ## Accessing blocks
+//!
+//! ### Blocks with (partially) known type
+//!
+//! Since neither the names nor the types of the blocks contained in the SLHA file are known in
+//! advance, blocks can only be converted into their corresponding rust type when the block is
+//! accessed. Therefore all getter functions for blocks can return parse errors if the block is
+//! invalid or cannot be converted into the desired type.
+//!
+//! The SLHA object provides several methods that can be used to convert blocks into any type that
+//! implements the [`SlhaBlock`] trait.
+//! If the full type is known, the [`get_block`] function can be used to convert the block into
+//! either a [`Block`] or a [`BlockSingle`] object.
+//! If only the value type is known but not the key type, then these blocks can be converted into a
+//! `BlockStr`, which uses a vector of 'words' as key.
+//!
+//! ### Blocks with unknown type
+//!
+//! As a last resort, the [`get_raw_blocks`] method can be used to obtain a [`RawBlock`] object for
+//! each block with a given name.
+//! This object contains the raw (string) data that makes up the block.
+//!
+//! ### Repeated blocks
+//!
+//! The [`Slha`] objects has several methods to access blocks that may appear more than once.
+//!
+//! * The [`get_block`] method is supposed to be used for blocks that may only appear once in an SLHA
+//!   file, or in cases where the calling code is not prepared to handle more than one block.
+//!   If a block does appear multiple times, then this method will return an error when trying to
+//!   access it.
+//! * The [`get_blocks`] method. This method returns all occurences of a block in an SLHA file, as
+//!   long as these blocks have different scales.
+//!   As such, this method can be used to access e.g. grids for running parameters.
+//! * The [`get_blocks_unchecked`] method is similar to the `get_blocks` method, but does not perform
+//!   any sanity checks.
+//!   Using this function it is for example possible to read duplicate blocks without scale.
+//!
+//! ### Examples
+//!
+//! ```rust
+//! use slha::{Slha, Block, BlockStr};
+//!
+//! let input = "\
+//! Block SMINPUTS   # Standard Model inputs
+//!      3      0.1172  # alpha_s(MZ) SM MSbar
+//!      5      4.25    # Mb(mb) SM MSbar
+//!      6    174.3     # Mtop(pole)
+//! DECAY 6 1.35
+//!    1   2   5   24
+//! ";
+//!
+//! let slha = match Slha::parse(input) {
+//!     Ok(slha) => slha,
+//!     Err(err) => panic!("Failed to deserialize SLHA file: {}", err),
+//! };
+//!
+//! // Using `Block`
+//! let sminputs: Block<i8, f64> = match slha.get_block("sminputs") {
+//!     Some(block) => match block {
+//!         Ok(sminputs) => sminputs,
+//!         Err(err) => panic!("Failed to parse block 'smimputs':\n{}", err),
+//!     },
+//!     None => panic!("Missing block 'sminputs'."),
+//! };
+//! assert_eq!(sminputs.scale, None);
+//! assert_eq!(sminputs.map.len(), 3);
+//! assert_eq!(sminputs.map[&5], 4.25);
+//!
+//! // Using `BlockStr`
+//! let sminputs: BlockStr<f64> = match slha.get_block("sminputs") {
+//!     Some(block) => match block {
+//!         Ok(sminputs) => sminputs,
+//!         Err(err) => panic!("Failed to parse block 'smimputs':\n{}", err),
+//!     },
+//!     None => panic!("Missing block 'sminputs'."),
+//! };
+//! assert_eq!(sminputs.scale, None);
+//! assert_eq!(sminputs.map.len(), 3);
+//! assert_eq!(sminputs.map[&vec!["5".to_string()]], 4.25);
+//!
+//! // Using `RawBlock`
+//! let blocks = slha.get_raw_blocks("sminputs");
+//! assert_eq!(blocks.len(), 1);
+//! let sminputs = &blocks[0];
+//! assert_eq!(sminputs.scale, None);
+//! assert_eq!(sminputs.lines.len(), 3);
+//! assert_eq!(sminputs.lines[1].data, "5      4.25    ");
+//! assert_eq!(sminputs.lines[1].comment, Some("# Mb(mb) SM MSbar"));
+//! ```
+//!
+//! ## Accessing decays
+//!
+//! The decay tables contained in the SLHA file can be accessed using the [`get_decay`] method.
+//!
+//! ### Examples
+//!
+//! ```rust
+//! use slha::{Slha, DecayTable};
+//!
+//! let input = "\
+//! Block SMINPUTS   # Standard Model inputs
+//!      3      0.1172  # alpha_s(MZ) SM MSbar
+//!      5      4.25    # Mb(mb) SM MSbar
+//!      6    174.3     # Mtop(pole)
+//! DECAY 6 1.35
+//!     1   2   5   24
+//! ";
+//!
+//! let slha = match Slha::parse(input) {
+//!     Ok(slha) => slha,
+//!     Err(err) => panic!("Failed to deserialize SLHA file: {}", err),
+//! };
+//!
+//! let decay_table = match slha.get_decay(6) {
+//!     Some(dec) => dec,
+//!     None => panic!("Missing decay table for the top quark."),
+//! };
+//! assert_eq!(decay_table.width, 1.35);
+//! let decay = &decay_table.decays;
+//! assert_eq!(decay.len(), 1);
+//! assert_eq!(decay[0].branching_ratio, 1.);
+//! assert_eq!(decay[0].daughters, vec![5, 24]);
+//! ```
+//!
+//! [SUSY Les Houches Accord]: https://arxiv.org/abs/hep-ph/0311123
+//! [1]: https://arxiv.org/abs/hep-ph/0311123
+//! [2]: https://arxiv.org/abs/0801.0045
+//! [`SlhaDeserialize`]: trait.SlhaDeserialize.html
+//! [`Slha`]: struct.Slha.html
+//! [`Using an Slha object`]: index.html#using-an-slha-object
+//! [`SlhaBlock`]: trait.SlhaBlock.html
+//! [`Block`]: struct.Block.html
+//! [`BlockSingle`]: struct.BlockSingle.html
+//! [`BlockStr`]: struct.BlockStr.html
+//! [`RawBlock`]: struct.RawBlock.html
+//! [`DecayTable`]: struct.DecayTable.html
+//! [`get_block`]: struct.Slha.html#method.get_decay
+//! [`get_blocks`]: struct.Slha.html#method.get_decay
+//! [`get_blocks_unchecked`]: struct.Slha.html#method.get_decay
+//! [`get_raw_blocks`]: struct.Slha.html#method.get_decay
+//! [`get_decay`]: struct.Slha.html#method.get_decay
 
 #![recursion_limit="256"]
 
@@ -1069,12 +1265,79 @@ pub struct Line<'input> {
     pub comment: Option<&'input str>,
 }
 
+/// An unparsed block from an SLHA file.
+///
+/// `RawBlock` contains all the non-comment, non-whitespace lines that belong to a block as well as
+/// the scale that the contents of the block are defined at, if any.
+///
+/// # Examples
+///
+/// ```rust
+/// use slha::Slha;
+///
+/// let input = "\
+/// Block SMINPUTS   # Standard Model inputs
+///      3      0.1172  # alpha_s(MZ) SM MSbar
+///      5      4.25    # Mb(mb) SM MSbar
+///      6    174.3     # Mtop(pole)
+/// DECAY 6 1.35
+///     1   2   5   24
+/// ";
+///
+/// let slha = match Slha::parse(input) {
+///     Ok(slha) => slha,
+///     Err(err) => panic!("Failed to deserialize SLHA file: {}", err),
+/// };
+///
+/// let blocks = slha.get_raw_blocks("sminputs");
+/// assert_eq!(blocks.len(), 1);
+/// let sminputs = &blocks[0];
+/// assert_eq!(sminputs.scale, None);
+/// assert_eq!(sminputs.lines.len(), 3);
+/// assert_eq!(sminputs.lines[1].data, "5      4.25    ");
+/// assert_eq!(sminputs.lines[1].comment, Some("# Mb(mb) SM MSbar"));
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct RawBlock<'a> {
+    /// The scale contained in the block header.
     pub scale: Option<f64>,
+    /// The data lines that make up the block, in the order they appear in the SLHA file.
     pub lines: Vec<Line<'a>>,
 }
 impl<'a> RawBlock<'a> {
+    /// Convert a `RawBlock` into a rust object.
+    ///
+    /// # Examples
+    /// ```rust
+    /// use slha::{Slha, Block};
+    ///
+    /// let input = "\
+    /// Block SMINPUTS   # Standard Model inputs
+    ///      3      0.1172  # alpha_s(MZ) SM MSbar
+    ///      5      4.25    # Mb(mb) SM MSbar
+    ///      6    174.3     # Mtop(pole)
+    /// DECAY 6 1.35
+    ///     1   2   5   24
+    /// ";
+    ///
+    /// let slha = match Slha::parse(input) {
+    ///     Ok(slha) => slha,
+    ///     Err(err) => panic!("Failed to read SLHA file: {}", err),
+    /// };
+    ///
+    /// let blocks = slha.get_raw_blocks("sminputs");
+    /// assert_eq!(blocks.len(), 1);
+    /// let sminputs_raw = &blocks[0];
+    ///
+    /// let sminputs: Block<u8, f64> = match sminputs_raw.to_block("sminputs") {
+    ///     Ok(block) => block,
+    ///     Err(err) => panic!("Failed to parse block 'sminputs': {}", err),
+    /// };
+    ///
+    /// assert_eq!(sminputs.scale, None);
+    /// assert_eq!(sminputs.map.len(), 3);
+    /// assert_eq!(sminputs.map[&5], 4.25);
+    /// ```
     pub fn to_block<B>(&self, name: &str) -> Result<B>
     where
         B: SlhaBlock<Error>,
@@ -1110,8 +1373,8 @@ impl<'a> RawBlock<'a> {
 ///
 /// # Example
 ///
-/// The following example shows all three ways how to access a block, as well as how to access the
-/// decay table for a given particle.
+/// The following example shows all three ways how to access a single block, as well as how to
+/// access the decay table for a given particle.
 ///
 /// First, extract all blocks and decays into an `Slha` object:
 ///
@@ -1261,7 +1524,50 @@ pub struct Slha<'a> {
     decays: HashMap<i64, DecayTable>,
 }
 impl<'a> Slha<'a> {
-    /// Create a new Slha object from raw data.
+    /// Create a new Slha object from the contents of an SLHA file.
+    ///
+    /// The SLHA file passed to this function is parsed down into its basic building blocks, so
+    /// that decays and blocks can be easily accessed using the various getter functions.
+    /// Decays are parsed completely, for blocks only the raw data is stored and only parsed into
+    /// the desired form by the three `get_block` functions.
+    ///
+    /// # Errors
+    ///
+    /// Some errors can already be caught at this stage, even though most checking is only done by
+    /// the accessor functions.
+    /// Errors reported by this function are all errors regarding decays, as well as errors from
+    /// malformed block headers.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use slha::{Slha, Block, BlockStr, DecayTable};
+    ///
+    /// let input = "\
+    /// Block SMINPUTS   # Standard Model inputs
+    ///      3      0.1172  # alpha_s(MZ) SM MSbar
+    ///      5      4.25    # Mb(mb) SM MSbar
+    ///      6    174.3     # Mtop(pole)
+    /// DECAY 6 1.35
+    ///     1   2   5   24
+    /// ";
+    ///
+    /// let slha = match Slha::parse(input) {
+    ///     Ok(slha) => slha,
+    ///     Err(err) => panic!("Failed to deserialize SLHA file: {}", err),
+    /// };
+    ///
+    /// let sminputs: Block<i8, f64> = match slha.get_block("sminputs") {
+    ///     Some(block) => match block {
+    ///         Ok(sminputs) => sminputs,
+    ///         Err(err) => panic!("Failed to parse block 'smimputs':\n{}", err),
+    ///     },
+    ///     None => panic!("Missing block 'sminputs'."),
+    /// };
+    /// assert_eq!(sminputs.scale, None);
+    /// assert_eq!(sminputs.map.len(), 3);
+    /// assert_eq!(sminputs.map[&5], 4.25);
+    /// ```
     pub fn parse(input: &'a str) -> Result<Slha<'a>> {
         let mut slha = Slha {
             blocks: HashMap::new(),
@@ -1287,7 +1593,51 @@ impl<'a> Slha<'a> {
         Ok(slha)
     }
 
-    /// Lookup a block.
+    /// Lookup a single block by name and parse it into the required rust type.
+    ///
+    /// If there is no block with the given name, None is returned. If there is more than one
+    /// block with the name, an error is returned inside a `Some`. Otherwise the body of the block
+    /// is converted into an object of type `B` and the result is returned.
+    /// If a block may appear more than once in an SLHA file, the methods `get_blocks` and
+    /// `get_blocks_unchecked` may be used to access all of them.
+    ///
+    /// # Errors
+    ///
+    /// It is an error if there is more than one block with name `name` in the file.
+    /// This is independently of the scale.
+    /// Additionally, errors encountered while parsing the raw body of the block into an object of
+    /// type `B` are returned.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use slha::{Slha, Block, BlockStr, DecayTable};
+    ///
+    /// let input = "\
+    /// Block SMINPUTS   # Standard Model inputs
+    ///      3      0.1172  # alpha_s(MZ) SM MSbar
+    ///      5      4.25    # Mb(mb) SM MSbar
+    ///      6    174.3     # Mtop(pole)
+    /// DECAY 6 1.35
+    ///     1   2   5   24
+    /// ";
+    ///
+    /// let slha = match Slha::parse(input) {
+    ///     Ok(slha) => slha,
+    ///     Err(err) => panic!("Failed to deserialize SLHA file: {}", err),
+    /// };
+    ///
+    /// let sminputs: Block<i8, f64> = match slha.get_block("sminputs") {
+    ///     Some(block) => match block {
+    ///         Ok(sminputs) => sminputs,
+    ///         Err(err) => panic!("Failed to parse block 'smimputs':\n{}", err),
+    ///     },
+    ///     None => panic!("Missing block 'sminputs'."),
+    /// };
+    /// assert_eq!(sminputs.scale, None);
+    /// assert_eq!(sminputs.map.len(), 3);
+    /// assert_eq!(sminputs.map[&5], 4.25);
+    /// ```
     pub fn get_block<B: SlhaBlock<Error>>(&self, name: &str) -> Option<Result<B>> {
         let name = name.to_lowercase();
         let blocks = match self.blocks.get(&name) {
@@ -1300,7 +1650,57 @@ impl<'a> Slha<'a> {
         Some(blocks[0].to_block(&name))
     }
 
-    /// Lookup a block.
+    /// Lookup all blocks with a given name but different scale and parse them into a vector of
+    /// rust objects.
+    ///
+    /// This function checks that all blocks have different scales.
+    /// If one block does have a scale, then all of them must have one.
+    /// Only one block without a scale is allowed.
+    /// As an alternative the method `get_blocks_unchecked` exists, which does not perform these
+    /// sanity checks.
+    /// If there is no block with the given name, the returned vector is empty.
+    ///
+    /// The returned blocks are in the same order as they appear in the SLHA file.
+    ///
+    /// # Errors
+    ///
+    /// If (at least) one of the blocks could not be parsed into an object of type `B`.
+    /// If the blocks do not have unique scales as described above.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use slha::{Slha, Block};
+    ///
+    /// let input = "\
+    /// BLOCK Mass
+    ///     6    173.2
+    /// Block ye Q= 20
+    ///     3  3 9.0e-02   # Ytau(Q)MSSM DRbar
+    /// Block yu Q= 10
+    ///     3  3 8.88194465e-01   # Yt(Q)MSSM DRbar
+    /// Block ye Q= 40
+    ///     3  3 7.0e-03   # Ytau(Q)MSSM DRbar
+    /// ";
+    ///
+    /// let slha = Slha::parse(input).unwrap();
+    /// let mass: Vec<Block<i64, f64>> = match slha.get_blocks("mass") {
+    ///     Ok(mass) => mass,
+    ///     Err(err) => panic!("Error while parsing block mass: {}", err),
+    /// };
+    /// assert_eq!(mass.len(), 1);
+    /// assert_eq!(mass[0].map[&6], 173.2);
+    ///
+    /// let ye: Vec<Block<(i8,i8), f64>> = match slha.get_blocks("ye") {
+    ///     Ok(ye) => ye,
+    ///     Err(err) => panic!("Error while parsing block ye: {}", err),
+    /// };
+    /// assert_eq!(ye.len(), 2);
+    /// assert_eq!(ye[0].scale, Some(20.));
+    /// assert_eq!(ye[0].map[&(3,3) ], 9.0e-02);
+    /// assert_eq!(ye[1].scale, Some(40.));
+    /// assert_eq!(ye[1].map[&(3,3) ], 7.0e-03);
+    /// ```
     pub fn get_blocks<B: SlhaBlock<Error>>(&self, name: &str) -> Result<Vec<B>> {
         let blocks: Vec<B> = self.get_blocks_unchecked(name)?;
         let mut no_scale = false;
@@ -1320,7 +1720,57 @@ impl<'a> Slha<'a> {
         Ok(blocks)
     }
 
-    /// Lookup a block.
+    /// Lookup all blocks with a given name and parse them into a vector of rust objects.
+    ///
+    /// Unlike `get_blocks` this function does not check if the scales of the blocks are consistent
+    /// with each other.
+    /// If there is no block with the given name, the returned vector is empty.
+    ///
+    /// The returned blocks are in the same order as they appear in the SLHA file.
+    ///
+    /// # Errors
+    ///
+    /// If (at least) one of the blocks could not be parsed into an object of type `B`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use slha::{Slha, Block};
+    ///
+    /// let input = "\
+    /// BLOCK Mass
+    ///     6    173.2
+    /// Block ye Q= 20
+    ///     3  3 9.0e-02   # Ytau(Q)MSSM DRbar
+    /// Block ye Q= 30
+    ///     3  3 8.0e-01   # Yt(Q)MSSM DRbar
+    /// BLOCK Mass
+    ///     5    5.2
+    /// Block ye Q= 20
+    ///     3  3 7.0e-03   # Ytau(Q)MSSM DRbar
+    /// ";
+    ///
+    /// let slha = Slha::parse(input).unwrap();
+    /// let mass: Vec<Block<i64, f64>> = match slha.get_blocks_unchecked("mass") {
+    ///     Ok(mass) => mass,
+    ///     Err(err) => panic!("Error while parsing block mass: {}", err),
+    /// };
+    /// assert_eq!(mass.len(), 2);
+    /// assert_eq!(mass[0].map[&6], 173.2);
+    /// assert_eq!(mass[1].map[&5], 5.2);
+    ///
+    /// let ye: Vec<Block<(i8,i8), f64>> = match slha.get_blocks_unchecked("ye") {
+    ///     Ok(ye) => ye,
+    ///     Err(err) => panic!("Error while parsing block ye: {}", err),
+    /// };
+    /// assert_eq!(ye.len(), 3);
+    /// assert_eq!(ye[0].scale, Some(20.));
+    /// assert_eq!(ye[0].map[&(3,3) ], 9.0e-02);
+    /// assert_eq!(ye[1].scale, Some(30.));
+    /// assert_eq!(ye[1].map[&(3,3) ], 8.0e-01);
+    /// assert_eq!(ye[2].scale, Some(20.));
+    /// assert_eq!(ye[2].map[&(3,3) ], 7.0e-03);
+    /// ```
     pub fn get_blocks_unchecked<B: SlhaBlock<Error>>(&self, name: &str) -> Result<Vec<B>> {
         let name = name.to_lowercase();
         let blocks = match self.blocks.get(&name) {
@@ -1330,6 +1780,48 @@ impl<'a> Slha<'a> {
         blocks.iter().map(|block| block.to_block(&name)).collect()
     }
 
+    /// Returns the raw bodies of all blocks with the given names.
+    ///
+    /// The returned `RawBlock` objects contain all non-whitespace, non-comment lines that belong
+    /// to the block.
+    /// While leading whitespace is not included and neither is the newline at the end of the line,
+    /// all other whitespace is still present.
+    ///
+    /// The returned blocks are in the same order as they appear in the SLHA file.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use slha::{Slha, Line};
+    ///
+    /// let input = "\
+    /// BLOCK Mass
+    ///     6    173.2
+    /// Block ye Q= 20
+    ///     3  3 9.0e-02   # First line
+    /// Block ye Q= 30
+    ///     3  3 8.0e-01   #    Second line
+    /// BLOCK Mass
+    ///     5    5.2
+    /// Block ye Q= 20
+    ///     3  3 7.0e-03   # Third
+    /// ";
+    ///
+    /// let slha = Slha::parse(input).unwrap();
+    /// let mass = slha.get_raw_blocks("mass");
+    /// assert_eq!(mass.len(), 2);
+    /// assert_eq!(mass[0].lines[0], Line { data: "6    173.2", comment: None });
+    /// assert_eq!(mass[1].lines[0], Line { data: "5    5.2", comment: None });
+    ///
+    /// let ye = slha.get_raw_blocks("ye");
+    /// assert_eq!(ye.len(), 3);
+    /// assert_eq!(ye[0].scale, Some(20.));
+    /// assert_eq!(ye[0].lines[0], Line { data: "3  3 9.0e-02   ", comment: Some("# First line") });
+    /// assert_eq!(ye[1].scale, Some(30.));
+    /// assert_eq!(ye[1].lines[0], Line { data: "3  3 8.0e-01   ", comment: Some("#    Second line") });
+    /// assert_eq!(ye[2].scale, Some(20.));
+    /// assert_eq!(ye[2].lines[0], Line { data: "3  3 7.0e-03   ", comment: Some("# Third") });
+    /// ```
     pub fn get_raw_blocks<'s>(&'s self, name: &str) -> &'s [RawBlock<'a>] {
         let name = name.to_lowercase();
         match self.blocks.get(&name) {
@@ -1338,6 +1830,38 @@ impl<'a> Slha<'a> {
         }
     }
 
+    /// Returns the decay table of the particle with the given pdg id.
+    ///
+    /// If there is no decay table for the given particle in the SLHA file, then `None` is
+    /// returned.
+    ///
+    /// ```rust
+    /// use slha::{Slha, DecayTable};
+    ///
+    /// let input = "\
+    /// Block SMINPUTS   # Standard Model inputs
+    ///      3      0.1172  # alpha_s(MZ) SM MSbar
+    ///      5      4.25    # Mb(mb) SM MSbar
+    ///      6    174.3     # Mtop(pole)
+    /// DECAY 6 1.35
+    ///     1   2   5   24
+    /// ";
+    ///
+    /// let slha = match Slha::parse(input) {
+    ///     Ok(slha) => slha,
+    ///     Err(err) => panic!("Failed to deserialize SLHA file: {}", err),
+    /// };
+    ///
+    /// let decay_table = match slha.get_decay(6) {
+    ///     Some(dec) => dec,
+    ///     None => panic!("Missing decay table for the top quark."),
+    /// };
+    /// assert_eq!(decay_table.width, 1.35);
+    /// let decay = &decay_table.decays;
+    /// assert_eq!(decay.len(), 1);
+    /// assert_eq!(decay[0].branching_ratio, 1.);
+    /// assert_eq!(decay[0].daughters, vec![5, 24]);
+    /// ```
     pub fn get_decay(&self, pdg_id: i64) -> Option<&DecayTable> {
         self.decays.get(&pdg_id)
     }
