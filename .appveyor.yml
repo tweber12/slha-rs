@@ -20,9 +20,9 @@ install:
 build: false
 
 test_script:
-    - cd slha; cargo build --release --target %TARGET% --verbose
-    - cd slha; cargo test --release --target %TARGET% --verbose
-    - cd slha-test; cargo test --release --target %TARGET% --verbose
+    - cd %APPVEYOR_BUILD_FOLDER%/slha; cargo build --release --target %TARGET% --verbose
+    - cd %APPVEYOR_BUILD_FOLDER%/slha; cargo test --release --target %TARGET% --verbose
+    - cd %APPVEYOR_BUILD_FOLDER%/slha-test; cargo test --release --target %TARGET% --verbose
 
 cache:
     - C:\Users\appveyor\.cargo\registry
