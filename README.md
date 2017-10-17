@@ -1,3 +1,6 @@
+[![Build Status](https://travis-ci.org/tweber12/slha-rs.svg?branch=master)](https://travis-ci.org/tweber12/slha-rs)
+[![Build status](https://ci.appveyor.com/api/projects/status/xhr92ei8tkptlnap?svg=true)](https://ci.appveyor.com/project/TorstenWeber/slha-rs)
+
 # The `slha` crate
 
 The `slha` crate is a crate to read [SUSY Les Houches Accord] (or SLHA) files.
