@@ -3,7 +3,15 @@ name = "slha-derive"
 version = "0.1.0"
 authors = ["Torsten Weber <tweber@physik.rwth-aachen.de>"]
 license = "MIT/Apache-2.0"
+description = "A macro to derive SlhaDeserialize from the slha crate"
 repository = "https://github.com/tweber12/slha-rs"
+keywords = ["physics", "slha", "susy", "hep"]
+categories = ["science"]
+readme = "README.md"
+
+[badges]
+appveyor = { repository = "tweber12/slha-rs" }
+travis-ci = { repository = "tweber12/slha-rs" }
 
 [lib]
 proc_macro = true

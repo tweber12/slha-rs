@@ -3,7 +3,15 @@ name = "slha-test"
 version = "0.1.0"
 authors = ["Torsten Weber <tweber@physik.rwth-aachen.de>"]
 license = "MIT/Apache-2.0"
+description = "Tests for the slha-derive crate"
 repository = "https://github.com/tweber12/slha-rs"
+keywords = ["physics", "slha", "susy", "hep"]
+categories = ["science"]
+readme = "README.md"
+
+[badges]
+appveyor = { repository = "tweber12/slha-rs" }
+travis-ci = { repository = "tweber12/slha-rs" }
 
 [dev_dependencies]
 slha = { path = "../slha" }

@@ -3,7 +3,15 @@ name = "slha"
 version = "0.1.0"
 authors = ["Torsten Weber <tweber@physik.rwth-aachen.de>"]
 license = "MIT/Apache-2.0"
+description = "A crate to read SUSY Les Houches Accord files"
 repository = "https://github.com/tweber12/slha-rs"
+keywords = ["physics", "slha", "susy", "hep"]
+categories = ["science"]
+readme = "README.md"
+
+[badges]
+appveyor = { repository = "tweber12/slha-rs" }
+travis-ci = { repository = "tweber12/slha-rs" }
 
 [dependencies]
 error-chain = "0.11.0"
