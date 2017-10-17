@@ -11,6 +11,6 @@ matrix:
     - rust: nightly
 
 script:
-  cd slha; cargo build --release
-  cd slha; cargo test --release
-  cd slha-test; cargo test --release
+  - cd slha && cargo build --release
+  - cd slha && cargo test --release
+  - cd slha-test && cargo test --release
