@@ -12,5 +12,5 @@ matrix:
 
 script:
   - cd slha && cargo build --release
-  - cd slha && cargo test --release
-  - cd slha-test && cargo test --release
+  - cargo test --release
+  - cd ../slha-test && cargo test --release
