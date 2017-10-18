@@ -222,6 +222,121 @@
 //! # }
 //! ```
 //!
+//! The `modifier` module contains additional types that can be used to obtain different behaviour
+//! when duplicate blocks are encountered.
+//!
+//! * The `VecUnchecked` type works like a `Vec`, except that no sanity checks are performed at all.
+//!   As such this type can be used to really collect all occurences of a block.
+//! * The `TakeFirst` and `TakeLast` wrappers keep the first and last occurence of a block
+//!   respectively.
+//!
+//!
+//! Taking the first...
+//!
+//! ```rust
+//! # extern crate slha;
+//! # #[macro_use]
+//! # extern crate slha_derive;
+//! #
+//! # use slha::{SlhaDeserialize, Block};
+//! # use slha::modifier::TakeFirst;
+//! #
+//! # fn main() {
+//! let input = "\
+//! Block MODsel Q= 10 # Select model
+//!      3     10     # tanb
+//! Block MODsel  # Select model
+//!      4      1     # sign(mu)
+//! Block MODsel Q= 20 # Select model
+//!      1    100     # m0
+//! Block MODsel Q= 10 # Select model
+//!      2    250     # m12
+//! Block MODsel  # Select model
+//!      5   -100     # A0 ";
+//!
+//! #[derive(Debug, SlhaDeserialize)]
+//! struct MySlhaFirst {
+//!     modsel: TakeFirst<Block<i8, i64>>,
+//! }
+//!
+//! let first = MySlhaFirst::deserialize(input).unwrap();
+//! let modsel = first.modsel;
+//! assert_eq!(modsel.scale, Some(10.));
+//! assert_eq!(modsel.map[&3], 10);
+//! # }
+//! ```
+//!
+//! ...or the last...
+//!
+//! ```rust
+//! # extern crate slha;
+//! # #[macro_use]
+//! # extern crate slha_derive;
+//! #
+//! # use slha::{SlhaDeserialize, Block};
+//! # use slha::modifier::TakeLast;
+//! #
+//! # fn main() {
+//! # let input = "\
+//! # Block MODsel Q= 10 # Select model
+//! #      3     10     # tanb
+//! # Block MODsel  # Select model
+//! #      4      1     # sign(mu)
+//! # Block MODsel Q= 20 # Select model
+//! #      1    100     # m0
+//! # Block MODsel Q= 10 # Select model
+//! #      2    250     # m12
+//! # Block MODsel  # Select model
+//! #      5   -100     # A0 ";
+//! #
+//! #[derive(Debug, SlhaDeserialize)]
+//! struct MySlhaLast {
+//!     modsel: TakeLast<Block<i8, i64>>,
+//! }
+//!
+//! let last = MySlhaLast::deserialize(input).unwrap();
+//! let modsel = last.modsel;
+//! assert_eq!(modsel.scale, None);
+//! assert_eq!(modsel.map[&5], -100);
+//! # }
+//! ```
+//!
+//! ...or all blocks can easily be achieved using these modifiers.
+//!
+//! ```rust
+//! # extern crate slha;
+//! # #[macro_use]
+//! # extern crate slha_derive;
+//! #
+//! # use slha::{SlhaDeserialize, Block};
+//! # use slha::modifier::VecUnchecked;
+//! #
+//! # fn main() {
+//! #    let input = "\
+//! # Block MODsel Q= 10 # Select model
+//! #      3     10     # tanb
+//! # Block MODsel  # Select model
+//! #      4      1     # sign(mu)
+//! # Block MODsel Q= 20 # Select model
+//! #      1    100     # m0
+//! # Block MODsel Q= 10 # Select model
+//! #      2    250     # m12
+//! # Block MODsel  # Select model
+//! #      5   -100     # A0 ";
+//! #
+//! #[derive(Debug, SlhaDeserialize)]
+//! struct MySlhaAll {
+//!     modsel: VecUnchecked<Block<i8, i64>>,
+//! }
+//!
+//! let all = MySlhaAll::deserialize(input).unwrap();
+//! let modsel = all.modsel;
+//! assert_eq!(modsel.len(), 5);
+//! assert_eq!(modsel[0].map[&3], 10);
+//! assert_eq!(modsel[2].scale, Some(20.));
+//! assert_eq!(modsel[3].map[&2], 250);
+//! # }
+//! ```
 //!
 //! ## Decays
 //!
@@ -421,6 +536,8 @@ use std::hash::Hash;
 use std::str;
 
 pub mod internal;
+pub mod modifier;
+
 use internal::{Segment, next_word};
 
 pub mod errors {

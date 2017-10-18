@@ -14,6 +14,7 @@ extern crate slha_derive;
 
 use std::collections::HashMap;
 use slha::{Block, SlhaDeserialize, DecayTable, Decay, BlockSingle};
+use slha::modifier::{VecUnchecked, TakeFirst, TakeLast};
 use slha::errors::{Error, ErrorKind};
 
 #[test]
@@ -775,6 +776,121 @@ Block MODsel  # SUSY breaking input parameters
     } else {
         panic!("Wrong error variant {:?} instead of DuplicateBlock", err);
     }
+}
+
+#[test]
+fn test_duplicate_block_vecunchecked() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MODsel  # SUSY breaking input parameters
+     3     10     # tanb
+     4      1     # sign(mu)
+     1    100     # m0
+     2    250     # m12
+     5   -100     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: VecUnchecked<Block<i8, i64>>,
+        minpar: VecUnchecked<Block<i8, f64>>,
+    }
+
+    let slha = MySlha::deserialize(input).unwrap();
+    let minpar = slha.minpar;
+    assert_eq!(minpar.len(), 0);
+    let modsel = slha.modsel;
+    assert_eq!(modsel.len(), 2);
+    assert_eq!(modsel[0].map.len(), 1);
+    assert_eq!(modsel[0].map[&1], 1);
+    assert_eq!(modsel[1].map.len(), 5);
+    assert_eq!(modsel[1].map[&1], 100);
+    assert_eq!(modsel[1].map[&5], -100);
+}
+
+#[test]
+fn test_duplicate_block_takefirst() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS Q= 9  # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MODsel  # SUSY breaking input parameters
+     3     10     # tanb
+     4      1     # sign(mu)
+     1    100     # m0
+     2    250     # m12
+     5   -100     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: TakeFirst<Block<i8, i64>>,
+        sminputs: TakeFirst<Block<i8, f64>>,
+    }
+
+    let slha = MySlha::deserialize(input).unwrap();
+    let sminputs = slha.sminputs;
+    assert_eq!(sminputs.scale, Some(9.));
+    assert_eq!(sminputs.map.len(), 3);
+    assert_eq!(sminputs.map[&3], 0.1172);
+    assert_eq!(sminputs.map[&5], 1.23);
+    assert_eq!(sminputs.map[&6], 174.3);
+    let modsel = slha.modsel;
+    assert_eq!(modsel.map.len(), 1);
+    assert_eq!(modsel.map[&1], 1);
+}
+
+#[test]
+fn test_duplicate_block_takelast() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS Q= 9  # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MODsel  # SUSY breaking input parameters
+     3     10     # tanb
+     4      1     # sign(mu)
+     1    100     # m0
+     2    250     # m12
+     5   -100     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: TakeLast<Block<i8, i64>>,
+        sminputs: TakeLast<Block<i8, f64>>,
+    }
+
+    let slha = MySlha::deserialize(input).unwrap();
+    let sminputs = slha.sminputs;
+    assert_eq!(sminputs.scale, Some(9.));
+    assert_eq!(sminputs.map.len(), 3);
+    assert_eq!(sminputs.map[&3], 0.1172);
+    assert_eq!(sminputs.map[&5], 1.23);
+    assert_eq!(sminputs.map[&6], 174.3);
+    let modsel = slha.modsel;
+    assert_eq!(modsel.map.len(), 5);
+    assert_eq!(modsel.map[&1], 100);
+    assert_eq!(modsel.map[&2], 250);
+    assert_eq!(modsel.map[&3], 10);
+    assert_eq!(modsel.map[&4], 1);
+    assert_eq!(modsel.map[&5], -100);
 }
 
 #[test]
