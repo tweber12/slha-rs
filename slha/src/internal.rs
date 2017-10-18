@@ -50,7 +50,7 @@ pub trait WrappedBlock<E>: Sized {
 
 impl<T> WrappedBlock<Error> for T
 where
-    T: SlhaBlock<Error>,
+    T: SlhaBlock,
 {
     type Wrapper = Option<T>;
     fn parse_into<'a>(
@@ -80,7 +80,7 @@ where
 
 impl<T> WrappedBlock<Error> for Option<T>
 where
-    T: SlhaBlock<Error>,
+    T: SlhaBlock,
 {
     type Wrapper = Option<T>;
     fn parse_into<'a>(
@@ -106,7 +106,7 @@ where
 
 impl<T> WrappedBlock<Error> for Vec<T>
 where
-    T: SlhaBlock<Error>,
+    T: SlhaBlock,
 {
     type Wrapper = Vec<T>;
     fn parse_into<'a>(
@@ -146,10 +146,7 @@ where
 }
 
 /// Generically parse a block into the desired type.
-pub fn parse_block_from<'a, B: SlhaBlock<Error>>(
-    input: &[Line<'a>],
-    scale: Option<f64>,
-) -> Result<B> {
+pub fn parse_block_from<'a, B: SlhaBlock>(input: &[Line<'a>], scale: Option<f64>) -> Result<B> {
     B::parse(input, scale)
 }
 

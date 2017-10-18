@@ -416,7 +416,6 @@
 #[macro_use]
 extern crate error_chain;
 
-use std::result;
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::str;
@@ -620,7 +619,7 @@ pub trait SlhaDeserialize: Sized {
 /// struct to convert the body of a block read from the file into a rust type.
 /// Therefore this trait must be implemented for any type that you want to directly read from an
 /// SLHA block.
-pub trait SlhaBlock<E>: Sized {
+pub trait SlhaBlock: Sized {
     /// Parses the block from an SLHA file.
     ///
     /// The first argument of the `parse` function are all the data lines that belong
@@ -634,7 +633,7 @@ pub trait SlhaBlock<E>: Sized {
     ///
     /// An error should be returned if the body of the block can not be parsed into an object of
     /// of the implementing type.
-    fn parse<'a>(&[Line<'a>], scale: Option<f64>) -> result::Result<Self, E>;
+    fn parse<'a>(&[Line<'a>], scale: Option<f64>) -> Result<Self>;
 
     /// Returns the scale at which the block contents are defined, if any.
     fn scale(&self) -> Option<f64>;
@@ -907,7 +906,7 @@ where
     /// The map from keys to values.
     pub map: HashMap<Key, Value>,
 }
-impl<Key, Value> SlhaBlock<Error> for Block<Key, Value>
+impl<Key, Value> SlhaBlock for Block<Key, Value>
 where
     Key: Hash + Eq + Parseable,
     Value: Parseable,
@@ -1054,7 +1053,7 @@ pub struct BlockStr<Value> {
     pub scale: Option<f64>,
     pub map: HashMap<Vec<String>, Value>,
 }
-impl<Value> SlhaBlock<Error> for BlockStr<Value>
+impl<Value> SlhaBlock for BlockStr<Value>
 where
     Value: Parseable,
 {
@@ -1163,7 +1162,7 @@ pub struct BlockSingle<Value> {
     pub value: Value,
     pub scale: Option<f64>,
 }
-impl<Value> SlhaBlock<Error> for BlockSingle<Value>
+impl<Value> SlhaBlock for BlockSingle<Value>
 where
     Value: Parseable,
 {
@@ -1359,7 +1358,7 @@ impl<'a> RawBlock<'a> {
     /// ```
     pub fn to_block<B>(&self, name: &str) -> Result<B>
     where
-        B: SlhaBlock<Error>,
+        B: SlhaBlock,
     {
         B::parse(&self.lines, self.scale).chain_err(|| ErrorKind::InvalidBlock(name.to_string()))
     }
@@ -1657,7 +1656,7 @@ impl<'a> Slha<'a> {
     /// assert_eq!(sminputs.map.len(), 3);
     /// assert_eq!(sminputs.map[&5], 4.25);
     /// ```
-    pub fn get_block<B: SlhaBlock<Error>>(&self, name: &str) -> Option<Result<B>> {
+    pub fn get_block<B: SlhaBlock>(&self, name: &str) -> Option<Result<B>> {
         let name = name.to_lowercase();
         let blocks = match self.blocks.get(&name) {
             Some(blocks) => blocks,
@@ -1720,7 +1719,7 @@ impl<'a> Slha<'a> {
     /// assert_eq!(ye[1].scale, Some(40.));
     /// assert_eq!(ye[1].map[&(3,3) ], 7.0e-03);
     /// ```
-    pub fn get_blocks<B: SlhaBlock<Error>>(&self, name: &str) -> Result<Vec<B>> {
+    pub fn get_blocks<B: SlhaBlock>(&self, name: &str) -> Result<Vec<B>> {
         let blocks: Vec<B> = self.get_blocks_unchecked(name)?;
         let mut no_scale = false;
         let mut seen_scales = Vec::new();
@@ -1790,7 +1789,7 @@ impl<'a> Slha<'a> {
     /// assert_eq!(ye[2].scale, Some(20.));
     /// assert_eq!(ye[2].map[&(3,3) ], 7.0e-03);
     /// ```
-    pub fn get_blocks_unchecked<B: SlhaBlock<Error>>(&self, name: &str) -> Result<Vec<B>> {
+    pub fn get_blocks_unchecked<B: SlhaBlock>(&self, name: &str) -> Result<Vec<B>> {
         let name = name.to_lowercase();
         let blocks = match self.blocks.get(&name) {
             Some(blocks) => blocks,
