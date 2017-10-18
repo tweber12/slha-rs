@@ -105,6 +105,9 @@ where
                 }
                 seen.push(scale);
             } else {
+                if no_scale {
+                    bail!(ErrorKind::DuplicateBlock(name.to_string()));
+                }
                 no_scale = true;
                 if !seen.is_empty() {
                     return Err(ErrorKind::RedefinedBlockWithQ(name.to_string()).into());

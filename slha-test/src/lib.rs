@@ -724,16 +724,49 @@ Block SMINPUTS   # Standard Model inputs
      5      1.23    # Mb(mb) SM MSbar
      6    174.3     # Mtop(pole)
 Block MODsel  # SUSY breaking input parameters
-     3     10.0     # tanb
-     4      1.0     # sign(mu)
-     1    100.0     # m0
-     2    250.0     # m12
-     5   -100.0     # A0 ";
+     3     10     # tanb
+     4      1     # sign(mu)
+     1    100     # m0
+     2    250     # m12
+     5   -100     # A0 ";
 
     #[derive(Debug, SlhaDeserialize)]
     struct MySlha {
-        modsel: Block<i8, i8>,
+        modsel: Block<i8, i64>,
         minpar: Block<i8, f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let Error(ErrorKind::DuplicateBlock(name), _) = err {
+        assert_eq!(&name, "modsel");
+    } else {
+        panic!("Wrong error variant {:?} instead of DuplicateBlock", err);
+    }
+}
+
+#[test]
+fn test_duplicate_block_vec() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MODsel  # SUSY breaking input parameters
+     3     10     # tanb
+     4      1     # sign(mu)
+     1    100     # m0
+     2    250     # m12
+     5   -100     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: Vec<Block<i8, i64>>,
+        minpar: Vec<Block<i8, f64>>,
     }
 
     let err = MySlha::deserialize(input).unwrap_err();

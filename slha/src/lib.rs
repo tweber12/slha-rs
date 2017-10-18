@@ -1723,6 +1723,7 @@ impl<'a> Slha<'a> {
         for block in &blocks {
             match block.scale() {
                 Some(scale) => seen_scales.push(scale),
+                None if no_scale => bail!(ErrorKind::DuplicateBlock(name.to_lowercase())),
                 None => no_scale = true,
             }
         }
@@ -3010,6 +3011,35 @@ Block MODsel  # SUSY breaking input parameters
 
         let slha = Slha::parse(input).unwrap();
         let err: Result<Block<i8, f64>, Error> = slha.get_block("modsel").unwrap();
+        let err = err.unwrap_err();
+        if let Error(ErrorKind::DuplicateBlock(name), _) = err {
+            assert_eq!(&name, "modsel");
+        } else {
+            panic!("Wrong error variant {:?} instead of DuplicateBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_duplicate_block_vec() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      1.23    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MODsel  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+        let slha = Slha::parse(input).unwrap();
+        let err: Result<Vec<Block<i8, f64>>, Error> = slha.get_blocks("modsel");
         let err = err.unwrap_err();
         if let Error(ErrorKind::DuplicateBlock(name), _) = err {
             assert_eq!(&name, "modsel");
