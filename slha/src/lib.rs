@@ -1595,7 +1595,7 @@ impl<'a> Slha<'a> {
         while let Some(segment) = internal::parse_segment(&mut lines) {
             match segment? {
                 Segment::Block { name, block, scale } => {
-                    let mut blocks = slha.blocks.entry(name).or_insert_with(|| Vec::new());
+                    let blocks = slha.blocks.entry(name).or_insert_with(|| Vec::new());
                     blocks.push(RawBlock {
                         lines: block,
                         scale,
