@@ -39,7 +39,6 @@ fn impl_slha_deserialize(ast: &syn::DeriveInput) -> quote::Tokens {
     quote! {
         impl slha::SlhaDeserialize for #name {
             fn deserialize(input: &str) -> slha::errors::Result<#name> {
-                use slha::errors::ResultExt;
                 #(#let_bindings)*
                 let mut lines = input.lines().peekable();
                 while let Some(segment) = slha::internal::parse_segment(&mut lines) {
