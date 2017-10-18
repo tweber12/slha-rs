@@ -879,6 +879,40 @@ Block flup Q= 4.64649125e+03
 }
 
 #[test]
+fn test_duplicate_key_block() {
+    // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+    let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     6      0.1172  # alpha_s(MZ) SM MSbar
+     5      4.25    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+    #[derive(Debug, SlhaDeserialize)]
+    struct MySlha {
+        modsel: Block<i8, i8>,
+        minpar: Block<i8, f64>,
+        sminputs: Block<i8, f64>,
+    }
+
+    let err = MySlha::deserialize(input).unwrap_err();
+    if let Error(ErrorKind::InvalidBlock(name), _) = err {
+        assert_eq!(&name, "sminputs");
+    } else {
+        panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+    }
+}
+
+#[test]
 fn test_invalid_scale() {
     // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
     let input = "\

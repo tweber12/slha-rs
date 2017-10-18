@@ -512,6 +512,11 @@ pub mod errors {
             InvalidBlockValue {
                 description("Failed to parse the value of a block")
             }
+            /// A map-like block has a key appear more than once.
+            DuplicateKey(line: usize) {
+                description("There was a duplicate key in a block")
+                display("The key in line {} appears more than once in the block", line)
+            }
             /// A block (without scale) appeared more than once in the SLHA file.
             ///
             /// The field contains the name of the block.
@@ -782,6 +787,8 @@ impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12);
 /// There is however one restriction when using Strings. The parseable impl of String takes the
 /// whole line, which means that String can not be used as a key.
 ///
+/// Duplicate keys in a block are treated as a parse error.
+///
 /// # Reading blocks
 ///
 /// `Block` implements the `SlhaBlock` trait and therefore can be read from an SLHA file.
@@ -906,14 +913,8 @@ where
     Value: Parseable,
 {
     fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self> {
-        let map: Result<HashMap<Key, Value>> = lines
-            .iter()
-            .enumerate()
-            .map(|(n, line)| {
-                parse_line_block(line.data).chain_err(|| ErrorKind::InvalidBlockLine(n + 1))
-            })
-            .collect();
-        Ok(Block { map: map?, scale })
+        let map = parse_lines_helper(lines, parse_line_block)?;
+        Ok(Block { map, scale })
     }
     fn scale(&self) -> Option<f64> {
         self.scale
@@ -933,6 +934,26 @@ where
         || ErrorKind::InvalidBlockValue,
     )?;
     Ok((key, value))
+}
+
+fn parse_lines_helper<'input, K, V>(
+    lines: &[Line<'input>],
+    parser: fn(&str) -> Result<(K, V)>,
+) -> Result<HashMap<K, V>>
+where
+    K: Hash + Eq,
+{
+    let mut map = HashMap::new();
+    for (i, line) in lines.iter().enumerate() {
+        let (key, value) = parser(line.data).chain_err(
+            || ErrorKind::InvalidBlockLine(i + 1),
+        )?;
+        let dup = map.insert(key, value);
+        if dup.is_some() {
+            bail!(ErrorKind::DuplicateKey(i + 1));
+        }
+    }
+    Ok(map)
 }
 
 /// `BlockStr` is a more flexible but less typesafe version of `Block`.
@@ -955,6 +976,7 @@ where
 /// would be split into `vec!["1", "this", "5", "bar"]` and `(7.3, 3.0)` if `Value` = `(f64, f64)`
 /// or `vec!["1", "this", "5", "bar", "7.3"]` and `3` if `Value` = `i8`.
 ///
+/// Duplicate keys in a block are treated as a parse error.
 ///
 /// # Example
 ///
@@ -1037,11 +1059,8 @@ where
     Value: Parseable,
 {
     fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self> {
-        let map: Result<HashMap<Vec<String>, Value>> = lines
-            .iter()
-            .map(|line| parse_line_block_str(line.data))
-            .collect();
-        Ok(BlockStr { scale, map: map? })
+        let map = parse_lines_helper(lines, parse_line_block_str)?;
+        Ok(BlockStr { scale, map })
     }
     fn scale(&self) -> Option<f64> {
         self.scale
@@ -3241,6 +3260,181 @@ Block flup Q= 4.64649125e+03
         assert_eq!(blocks[0].map[&(3, 3)], 8.88193465e-01);
         assert_eq!(blocks[1].scale, None);
         assert_eq!(blocks[1].map[&(3, 3)], 9.97405356e-02);
+    }
+
+
+    #[test]
+    fn test_duplicate_key_block() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     6      0.1172  # alpha_s(MZ) SM MSbar
+     5      4.25    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Block<u8, f64>, Error> = slha.get_block("sminputs").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "sminputs");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_duplicate_key_blocks() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     6      0.1172  # alpha_s(MZ) SM MSbar
+     5      4.25    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Vec<Block<u8, f64>>, Error> = slha.get_blocks("sminputs");
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "sminputs");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_duplicate_key_blocksu() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     6      0.1172  # alpha_s(MZ) SM MSbar
+     5      4.25    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3     10.0     # tanb
+     4      1.0     # sign(mu)
+     1    100.0     # m0
+     2    250.0     # m12
+     5   -100.0     # A0 ";
+
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Vec<Block<u8, f64>>, Error> = slha.get_blocks_unchecked("sminputs");
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "sminputs");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_duplicate_key_blockstr() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      4.25    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3  5    10.0     # tanb
+     4  9     1.0     # sign(mu)
+     1  13  100.0     # m0
+       4      9     250.0     # m12
+     5  21 -100.0     # A0 ";
+
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<BlockStr<f64>, Error> = slha.get_block("minpar").unwrap();
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "minpar");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_duplicate_key_blockstrs() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      4.25    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3  5    10.0     # tanb
+     4  9     1.0     # sign(mu)
+     1  13  100.0     # m0
+       4      9     250.0     # m12
+     5  21 -100.0     # A0 ";
+
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Vec<BlockStr<f64>>, Error> = slha.get_blocks("minpar");
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "minpar");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
+    }
+
+    #[test]
+    fn test_duplicate_key_blockstrsu() {
+        // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
+        let input = "\
+# SUSY Les Houches Accord 1.0 - example input file
+# Snowmsas point 1a
+Block MODSEL  # Select model
+     1    1   # sugra
+Block SMINPUTS   # Standard Model inputs
+     3      0.1172  # alpha_s(MZ) SM MSbar
+     5      4.25    # Mb(mb) SM MSbar
+     6    174.3     # Mtop(pole)
+Block MINPAR  # SUSY breaking input parameters
+     3  5    10.0     # tanb
+     4  9     1.0     # sign(mu)
+     1  13  100.0     # m0
+       4      9     250.0     # m12
+     5  21 -100.0     # A0 ";
+
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Vec<BlockStr<f64>>, Error> = slha.get_blocks_unchecked("minpar");
+        let err = block.unwrap_err();
+        if let Error(ErrorKind::InvalidBlock(name), _) = err {
+            assert_eq!(&name, "minpar");
+        } else {
+            panic!("Wrong error variant {:?} instead of InvalidBlock", err);
+        }
     }
 
     #[test]
