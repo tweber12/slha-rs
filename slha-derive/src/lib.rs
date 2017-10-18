@@ -178,7 +178,7 @@ fn generate_match_arm_blocks(blocks: &[Block]) -> quote::Tokens {
         }
     } else {
         quote!{
-            slha::internal::Segment::Block { name, block, scale } => {
+            slha::internal::Segment::Block { name, block } => {
                 match name.as_ref() {
                     #(#arms)*
                     _ => continue,
@@ -197,7 +197,7 @@ fn generate_match_arms_block_name(blocks: &[Block]) -> Vec<quote::Tokens> {
             let match_str = &block.block_name;
             quote! {
                 #match_str => {
-                    <#ty as slha::internal::WrappedBlock<slha::errors::Error>>::parse_into(&block, scale, &mut #name, #match_str)?;
+                    <#ty as slha::internal::WrappedBlock<slha::errors::Error>>::parse_into(&block, &mut #name, #match_str)?;
                 }
             }
         })
