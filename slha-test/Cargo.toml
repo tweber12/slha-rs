@@ -16,3 +16,4 @@ travis-ci = { repository = "tweber12/slha-rs" }
 [dev_dependencies]
 slha = { path = "../slha" }
 slha-derive = { path = "../slha-derive" }
+error-chain = "0.11.0"
