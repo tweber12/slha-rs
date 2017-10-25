@@ -13,6 +13,8 @@ use {Line, SlhaBlock, RawBlock, Decay, ParseResult, Parseable};
 use errors::*;
 
 use std::{iter, result, str};
+use std::hash::Hash;
+use std::collections::HashMap;
 
 /// A segment read from an SLHA file, i.e. either a block or a decay table.
 #[derive(Clone, Debug, PartialEq)]
@@ -219,6 +221,54 @@ fn parse_block_scale(header: &str) -> Result<Option<f64>> {
         .chain_err(|| ErrorKind::InvalidScale)
         .map(Some)
 }
+
+/// Parses the body of a block
+pub fn parse_block_body<'input, K, V>(
+    lines: &[Line<'input>],
+) -> Result<HashMap<K, V>>
+where
+    K: Hash + Eq + Parseable,
+    V: Parseable,
+{
+    parse_block_body_by(lines, parse_line_block)
+}
+
+/// Parses the body of a block using a given parser for each line
+pub fn parse_block_body_by<'input, K, V>(
+    lines: &[Line<'input>],
+    line_parser: fn(&str) -> Result<(K, V)>,
+) -> Result<HashMap<K, V>>
+where
+    K: Hash + Eq,
+{
+    let mut map = HashMap::new();
+    for (i, line) in lines.iter().enumerate() {
+        let (key, value) = line_parser(line.data).chain_err(
+            || ErrorKind::InvalidBlockLine(i + 1),
+        )?;
+        let dup = map.insert(key, value);
+        if dup.is_some() {
+            bail!(ErrorKind::DuplicateKey(i + 1));
+        }
+    }
+    Ok(map)
+}
+
+fn parse_line_block<'input, K, V>(input: &'input str) -> Result<(K, V)>
+where
+    K: Parseable,
+    V: Parseable,
+{
+    let input = input.trim_left();
+    let (input, key) = K::parse(input).to_result().chain_err(
+        || ErrorKind::InvalidBlockKey,
+    )?;
+    let value = V::parse(input).end().chain_err(
+        || ErrorKind::InvalidBlockValue,
+    )?;
+    Ok((key, value))
+}
+
 
 fn parse_decay_table<'a, Iter>(
     header: &str,

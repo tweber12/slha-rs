@@ -538,7 +538,7 @@ use std::str;
 pub mod internal;
 pub mod modifier;
 
-use internal::{Segment, next_word};
+use internal::{Segment, next_word, parse_block_body, parse_block_body_by};
 
 pub mod errors {
     //! Errors that may occur when parsing an SLHA file into rust types.
@@ -1029,47 +1029,12 @@ where
     Value: Parseable,
 {
     fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self> {
-        let map = parse_lines_helper(lines, parse_line_block)?;
+        let map = parse_block_body(lines)?;
         Ok(Block { map, scale })
     }
     fn scale(&self) -> Option<f64> {
         self.scale
     }
-}
-
-fn parse_line_block<'input, K, V>(input: &'input str) -> Result<(K, V)>
-where
-    K: Parseable,
-    V: Parseable,
-{
-    let input = input.trim_left();
-    let (input, key) = K::parse(input).to_result().chain_err(
-        || ErrorKind::InvalidBlockKey,
-    )?;
-    let value = V::parse(input).end().chain_err(
-        || ErrorKind::InvalidBlockValue,
-    )?;
-    Ok((key, value))
-}
-
-fn parse_lines_helper<'input, K, V>(
-    lines: &[Line<'input>],
-    parser: fn(&str) -> Result<(K, V)>,
-) -> Result<HashMap<K, V>>
-where
-    K: Hash + Eq,
-{
-    let mut map = HashMap::new();
-    for (i, line) in lines.iter().enumerate() {
-        let (key, value) = parser(line.data).chain_err(
-            || ErrorKind::InvalidBlockLine(i + 1),
-        )?;
-        let dup = map.insert(key, value);
-        if dup.is_some() {
-            bail!(ErrorKind::DuplicateKey(i + 1));
-        }
-    }
-    Ok(map)
 }
 
 /// `BlockStr` is a more flexible but less typesafe version of `Block`.
@@ -1175,7 +1140,7 @@ where
     Value: Parseable,
 {
     fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self> {
-        let map = parse_lines_helper(lines, parse_line_block_str)?;
+        let map = parse_block_body_by(lines, parse_line_block_str)?;
         Ok(BlockStr { scale, map })
     }
     fn scale(&self) -> Option<f64> {
