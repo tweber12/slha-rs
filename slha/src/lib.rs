@@ -2454,6 +2454,35 @@ Block ye Q= 4.64649125e+03
     }
 
     #[test]
+    fn test_scales() {
+        let input = "\
+Block T1
+Block T2 Q= 17.3
+Block T3 q= 9
+Block T4 Q = 1e-3
+Block T5 q = -4.1
+Block T6 Q=8
+Block T7 q=-3.7e-9
+        ";
+
+        let slha = Slha::parse(input).unwrap();
+        let t1 = &slha.get_raw_blocks("T1")[0];
+        assert_eq!(t1.scale, None);
+        let t2 = &slha.get_raw_blocks("T2")[0];
+        assert_eq!(t2.scale, Some(17.3));
+        let t3 = &slha.get_raw_blocks("T3")[0];
+        assert_eq!(t3.scale, Some(9.));
+        let t4 = &slha.get_raw_blocks("T4")[0];
+        assert_eq!(t4.scale, Some(1e-3));
+        let t5 = &slha.get_raw_blocks("T5")[0];
+        assert_eq!(t5.scale, Some(-4.1));
+        let t6 = &slha.get_raw_blocks("T6")[0];
+        assert_eq!(t6.scale, Some(8.));
+        let t7 = &slha.get_raw_blocks("T7")[0];
+        assert_eq!(t7.scale, Some(-3.7e-9));
+    }
+
+    #[test]
     fn test_example_1() {
         // Example file from appendix D.1 of the slha1 paper(arXiv:hep-ph/0311123)
         let input = "\

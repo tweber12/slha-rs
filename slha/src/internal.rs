@@ -188,21 +188,32 @@ fn parse_block_header(header: &str) -> Result<(String, Option<f64>)> {
 }
 
 fn parse_block_scale(header: &str) -> Result<Option<f64>> {
-    let (word, rest) = match next_word(header) {
-        None => return Ok(None),
-        Some(a) => a,
-    };
-    println!("word: '{}', rest: '{}'", word, rest);
-    let rest = match word.to_lowercase().as_ref() {
-        "q=" => rest,
-        "q" => {
-            match next_word(rest) {
-                Some(("=", rest)) => rest,
-                _ => bail!(ErrorKind::MalformedBlockHeader(header.to_string())),
-            }
+    let mut has_scale = false;
+    let mut chars = header.char_indices();
+    while let Some((_,c)) = chars.next() {
+        if c.is_whitespace() {
+            continue;
         }
-        _ => bail!(ErrorKind::MalformedBlockHeader(header.to_string())),
-    };
+        if c == 'q' || c == 'Q' {
+            has_scale = true;
+            break;
+        }
+        bail!(ErrorKind::MalformedBlockHeader(header.to_string()));
+    }
+    if !has_scale {
+        return Ok(None);
+    }
+    let mut rest = header;
+    for (i, c) in chars {
+        if c.is_whitespace() {
+            continue;
+        }
+        if c == '=' {
+            rest = &header[i+1..];
+            break;
+        }
+        bail!(ErrorKind::MalformedBlockHeader(header.to_string()));
+    }
     f64::parse(rest.trim())
         .end()
         .chain_err(|| ErrorKind::InvalidScale)
