@@ -254,8 +254,7 @@ where
     }
     let mut words = input.split_whitespace();
     let key = Key::parse(&mut words).chain_err(|| ErrorKind::InvalidBlockKey)?;
-    let value = Value::parse(&mut words).chain_err(|| ErrorKind::InvalidBlockValue)?;
-    ensure_eol(&mut words)?;
+    let value = Value::parse_all(&mut words).chain_err(|| ErrorKind::InvalidBlockValue)?;
     Ok((key, value))
 }
 
@@ -290,12 +289,10 @@ where
     let start_value = words.len() - len_value as usize;
 
     let mut words_key = words[..start_value].iter().map(|x| *x);
-    let key = Key::parse(&mut words_key).chain_err(|| ErrorKind::InvalidBlockKey)?;
-    ensure_eol(&mut words_key).chain_err(|| ErrorKind::InvalidBlockKey)?;
+    let key = Key::parse_all(&mut words_key).chain_err(|| ErrorKind::InvalidBlockKey)?;
 
     let mut words_value = words[start_value..].iter().map(|x| *x);
-    let value = Value::parse(&mut words_value).chain_err(|| ErrorKind::InvalidBlockValue)?;
-    ensure_eol(&mut words_value).chain_err(|| ErrorKind::InvalidBlockValue)?;
+    let value = Value::parse_all(&mut words_value).chain_err(|| ErrorKind::InvalidBlockValue)?;
 
     Ok((key, value))
 }
@@ -349,10 +346,9 @@ fn parse_decay_table_header(header: &str) -> Result<(i64, f64)> {
     let (data, _) = split_comment(header);
     let mut words = data.split_whitespace();
     let pdg_id = i64::parse(&mut words).chain_err(|| ErrorKind::InvalidDecayingPdgId)?;
-    let width = f64::parse(&mut words)
+    let width = f64::parse_all(&mut words)
         .chain_err(|| ErrorKind::InvalidWidth)
         .chain_err(|| ErrorKind::InvalidDecay(pdg_id))?;
-    ensure_eol(&mut words)?;
     Ok((pdg_id, width))
 }
 

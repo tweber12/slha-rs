@@ -802,6 +802,22 @@ pub trait Parseable: Sized {
     fn parse<'input, I>(&mut I) -> Result<Self>
     where
         I: Iterator<Item = &'input str>;
+
+    fn parse_str<'input>(input: &'input str) -> Result<Self> {
+        Self::parse_all(&mut input.split_whitespace())
+    }
+
+    fn parse_all<'input, I>(input: &mut I) -> Result<Self>
+    where
+        I: Iterator<Item = &'input str>
+    {
+        let value = Self::parse(input)?;
+        let rest: Vec<_> = input.map(|x| x.to_string()).collect();
+        if !rest.is_empty() {
+            bail!(ErrorKind::IncompleteParse(rest));
+        }
+        Ok(value)
+    }
 }
 impl<T> Parseable for T
 where
@@ -1195,12 +1211,7 @@ where
         if lines.len() != 1 {
             bail!(ErrorKind::WrongNumberOfValues(lines.len()));
         }
-        let mut words = lines[0].data.split_whitespace();
-        let value = Value::parse(&mut words)?;
-        let rest: Vec<_> = words.map(|x| x.to_string()).collect();
-        if !rest.is_empty() {
-            bail!(ErrorKind::IncompleteParse(rest));
-        }
+        let value = Value::parse_str(lines[0].data)?;
         Ok(BlockSingle { value, scale })
     }
     fn scale(&self) -> Option<f64> {
