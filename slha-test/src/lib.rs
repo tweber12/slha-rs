@@ -1394,7 +1394,7 @@ mod malformed_block_header {
 # Snowmsas point 1a
 Block MODSEL  # Select model
      1    1   # sugra
-Block SM INPUTS   # Standard Model inputs
+Block SMINPUTS foo   # Standard Model inputs
      3      0.1172  # alpha_s(MZ) SM MSbar
      5      1.23    # Mb(mb) SM MSbar
      6    174.3     # Mtop(pole)
@@ -1404,7 +1404,7 @@ Block MINPAR  # SUSY breaking input parameters
      1    100.0     # m0
      2    250.0     # m12
      5   -100.0     # A0 ";
-    const BLOCK: &'static str = "sm";
+    const BLOCK: &'static str = "sminputs";
 
     test_invalid_block_1!(block => BLOCK, INPUT);
     test_invalid_block_1!(option => BLOCK, INPUT);
@@ -1418,7 +1418,7 @@ Block MINPAR  # SUSY breaking input parameters
     const INPUT_SINGLE: &'static str = "\
 Block MODSEL  # Select model
      1   # sugra
-Block SM INPUTS   # Standard Model inputs
+Block SMINPUTS foo   # Standard Model inputs
      0.1172  # alpha_s(MZ) SM MSbar
 Block MINPAR  # SUSY breaking input parameters
      10.0     # tanb

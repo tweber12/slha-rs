@@ -468,7 +468,7 @@
 //! let blocks = slha.get_raw_blocks("sminputs");
 //! assert_eq!(blocks.len(), 1);
 //! let sminputs = &blocks[0];
-//! assert_eq!(sminputs.scale, None);
+//! assert_eq!(sminputs.extra_header, "");
 //! assert_eq!(sminputs.lines.len(), 3);
 //! assert_eq!(sminputs.lines[1].data, "5      4.25    ");
 //! assert_eq!(sminputs.lines[1].comment, Some("# Mb(mb) SM MSbar"));
@@ -750,7 +750,7 @@ pub trait SlhaBlock: Sized {
     ///
     /// An error should be returned if the body of the block can not be parsed into an object of
     /// of the implementing type.
-    fn parse<'a>(&[Line<'a>], scale: Option<f64>) -> Result<Self>;
+    fn parse<'a>(&[Line<'a>], extra_header: &'a str) -> Result<Self>;
 
     /// Returns the scale at which the block contents are defined, if any.
     fn scale(&self) -> Option<f64>;
@@ -883,6 +883,107 @@ impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9; 9);
 impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10; 10);
 impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11; 11);
 impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12; 12);
+
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct OptScale(Option<f64>);
+impl Parseable for OptScale {
+    const LENGTH: Option<u8> = None;
+    fn parse<'input, I>(input: &mut I) -> Result<OptScale>
+        where
+            I: Iterator<Item = &'input str>,
+    {
+        let mut peek = input.peekable();
+        if peek.peek().is_some() {
+            let Scale(scale) = Scale::parse(&mut peek)?;
+            Ok(OptScale(Some(scale)))
+        } else {
+            Ok(OptScale(None))
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct Scale(f64);
+impl Parseable for Scale {
+    const LENGTH: Option<u8> = None;
+    fn parse<'input, I>(input: &mut I) -> Result<Scale>
+        where
+            I: Iterator<Item = &'input str>,
+    {
+        let first = match input.next() {
+            Some(word) => word,
+            None => {
+                let err: Error = ErrorKind::UnexpectedEol.into();
+                bail!(err.chain_err(|| ErrorKind::InvalidScale))
+            },
+        };
+        let val = match first {
+            "q=" | "Q=" => {
+                f64::parse(input)
+            },
+            "q" | "Q" => {
+                let second = match input.next() {
+                    Some(word) => word,
+                    None => {
+                        let err: Error = ErrorKind::UnexpectedEol.into();
+                        bail!(err.chain_err(|| ErrorKind::InvalidScale))
+                    },
+                };
+                match second {
+                    "=" => {
+                        f64::parse(input)
+                    },
+                    a if a.starts_with("=") => f64::parse_word(a[1..].trim()),
+                    _ => bail!(ErrorKind::InvalidScale),
+                }
+            }
+            a if a.starts_with("Q=") || a.starts_with("q=") => f64::parse_word(a[2..].trim()),
+            _ => bail!(ErrorKind::InvalidScale),
+        };
+        val.chain_err(|| ErrorKind::InvalidScale).map(Scale)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+struct NoExtraHeader();
+impl Parseable for NoExtraHeader {
+    const LENGTH: Option<u8> = Some(0);
+    fn parse<'input, I>(input: &mut I) -> Result<NoExtraHeader>
+        where
+            I: Iterator<Item = &'input str>,
+    {
+        let rest: Vec<_> = input.map(|x| x.to_string()).collect();
+        if !rest.is_empty() {
+            bail!(ErrorKind::IncompleteParse(rest));
+        }
+        Ok(NoExtraHeader())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlockExtra<Header, Key, Value>
+where
+    Key: Hash + Eq,
+{
+    /// The scale at which this block is defined, if any.
+    pub header: Header,
+    /// The map from keys to values.
+    pub map: HashMap<Key, Value>,
+}
+impl<Header, Key, Value> BlockExtra<Header, Key, Value>
+where
+    Header: Parseable,
+    Key: Hash + Eq + Parseable,
+    Value: Parseable,
+{
+    pub fn parse<'input>(lines: &[Line<'input>], header_extra: &'input str) -> Result<Self> {
+        // Return some better error here
+        let header = Header::parse_str(header_extra)?;
+        let map = parse_block_body(lines)?;
+        Ok(BlockExtra { header, map })
+    }
+}
+
 
 /// A block from an SLHA file treated as a map.
 ///
@@ -1022,9 +1123,10 @@ where
     Key: Hash + Eq + Parseable,
     Value: Parseable,
 {
-    fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self> {
-        let map = parse_block_body(lines)?;
-        Ok(Block { map, scale })
+    fn parse<'input>(lines: &[Line<'input>], extra: &'input str) -> Result<Self> {
+        let block: BlockExtra<OptScale, Key, Value>  = BlockExtra::parse(lines, extra)?;
+        let OptScale(scale) = block.header;
+        Ok(Block { map: block.map, scale })
     }
     fn scale(&self) -> Option<f64> {
         self.scale
@@ -1126,6 +1228,31 @@ where
 /// ```
 pub type BlockStr<Value> = Block<Vec<String>, Value>;
 
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlockSingleExtra<Header, Value>
+{
+    /// The scale at which this block is defined, if any.
+    pub header: Header,
+    /// The map from keys to values.
+    pub value: Value
+}
+impl<Header, Value> BlockSingleExtra<Header, Value>
+where
+    Header: Parseable,
+    Value: Parseable,
+{
+    pub fn parse<'input>(lines: &[Line<'input>], header_extra: &'input str) -> Result<Self> {
+        // Return some better error here
+        let header = Header::parse_str(header_extra)?;
+        if lines.len() != 1 {
+            bail!(ErrorKind::WrongNumberOfValues(lines.len()));
+        }
+        let value = Value::parse_str(lines[0].data)?;
+        Ok(BlockSingleExtra { header, value })
+    }
+}
+
 /// A block type that only contains a single value.
 ///
 /// This type of block does not represent a map like `Block` but just a single value and an
@@ -1207,12 +1334,10 @@ impl<Value> SlhaBlock for BlockSingle<Value>
 where
     Value: Parseable,
 {
-    fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self> {
-        if lines.len() != 1 {
-            bail!(ErrorKind::WrongNumberOfValues(lines.len()));
-        }
-        let value = Value::parse_str(lines[0].data)?;
-        Ok(BlockSingle { value, scale })
+    fn parse<'input>(lines: &[Line<'input>], extra: &'input str) -> Result<Self> {
+        let block: BlockSingleExtra<OptScale, Value> = BlockSingleExtra::parse(lines, extra)?;
+        let OptScale(scale) = block.header;
+        Ok(BlockSingle { value: block.value, scale })
     }
     fn scale(&self) -> Option<f64> {
         self.scale
@@ -1335,7 +1460,7 @@ pub struct Line<'input> {
 /// use slha::Slha;
 ///
 /// let input = "\
-/// Block SMINPUTS   # Standard Model inputs
+/// Block SMINPUTS foo  # Standard Model inputs
 ///      3      0.1172  # alpha_s(MZ) SM MSbar
 ///      5      4.25    # Mb(mb) SM MSbar
 ///      6    174.3     # Mtop(pole)
@@ -1351,7 +1476,7 @@ pub struct Line<'input> {
 /// let blocks = slha.get_raw_blocks("sminputs");
 /// assert_eq!(blocks.len(), 1);
 /// let sminputs = &blocks[0];
-/// assert_eq!(sminputs.scale, None);
+/// assert_eq!(sminputs.extra_header, "foo");
 /// assert_eq!(sminputs.lines.len(), 3);
 /// assert_eq!(sminputs.lines[1].data, "5      4.25    ");
 /// assert_eq!(sminputs.lines[1].comment, Some("# Mb(mb) SM MSbar"));
@@ -1359,7 +1484,7 @@ pub struct Line<'input> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct RawBlock<'a> {
     /// The scale contained in the block header.
-    pub scale: Option<f64>,
+    pub extra_header: &'a str,
     /// The data lines that make up the block, in the order they appear in the SLHA file.
     pub lines: Vec<Line<'a>>,
 }
@@ -1401,7 +1526,7 @@ impl<'a> RawBlock<'a> {
     where
         B: SlhaBlock,
     {
-        B::parse(&self.lines, self.scale).chain_err(|| ErrorKind::InvalidBlock(name.to_string()))
+        B::parse(&self.lines, self.extra_header).chain_err(|| ErrorKind::InvalidBlock(name.to_string()))
     }
 }
 
@@ -1542,7 +1667,7 @@ impl<'a> RawBlock<'a> {
 /// let blocks = slha.get_raw_blocks("sminputs");
 /// assert_eq!(blocks.len(), 1);
 /// let sminputs = &blocks[0];
-/// assert_eq!(sminputs.scale, None);
+/// assert_eq!(sminputs.extra_header, "");
 /// assert_eq!(sminputs.lines.len(), 3);
 /// assert_eq!(sminputs.lines[1].data, "5      4.25    ");
 /// assert_eq!(sminputs.lines[1].comment, Some("# Mb(mb) SM MSbar"));
@@ -1872,11 +1997,11 @@ impl<'a> Slha<'a> {
     ///
     /// let ye = slha.get_raw_blocks("ye");
     /// assert_eq!(ye.len(), 3);
-    /// assert_eq!(ye[0].scale, Some(20.));
+    /// assert_eq!(ye[0].extra_header, "Q= 20");
     /// assert_eq!(ye[0].lines[0], Line { data: "3  3 9.0e-02   ", comment: Some("# First line") });
-    /// assert_eq!(ye[1].scale, Some(30.));
+    /// assert_eq!(ye[1].extra_header, "Q= 30");
     /// assert_eq!(ye[1].lines[0], Line { data: "3  3 8.0e-01   ", comment: Some("#    Second line") });
-    /// assert_eq!(ye[2].scale, Some(20.));
+    /// assert_eq!(ye[2].extra_header, "Q= 20");
     /// assert_eq!(ye[2].lines[0], Line { data: "3  3 7.0e-03   ", comment: Some("# Third") });
     /// ```
     pub fn get_raw_blocks<'s>(&'s self, name: &str) -> &'s [RawBlock<'a>] {
@@ -1947,7 +2072,7 @@ fn find_duplicates<T: Clone + PartialOrd>(mut list: Vec<T>) -> Option<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Block, BlockSingle, BlockStr, Decay, Line, Parseable, Slha};
+    use super::{Block, BlockSingle, BlockStr, Decay, Line, Parseable, Slha, Scale, OptScale};
     use super::errors::{Error, ErrorKind};
 
     #[test]
@@ -2371,32 +2496,58 @@ Block ye Q= 4.64649125e+03
     }
 
     #[test]
-    fn test_scales() {
-        let input = "\
-Block T1
-Block T2 Q= 17.3
-Block T3 q= 9
-Block T4 Q = 1e-3
-Block T5 q = -4.1
-Block T6 Q=8
-Block T7 q=-3.7e-9
-        ";
+    fn test_parse_scales() {
+        let Scale(s) = Scale::parse(&mut "Q= 17.3".split_whitespace()).unwrap();
+        assert_eq!(s, 17.3);
+        let Scale(s) = Scale::parse(&mut "q= 17.3".split_whitespace()).unwrap();
+        assert_eq!(s, 17.3);
 
-        let slha = Slha::parse(input).unwrap();
-        let t1 = &slha.get_raw_blocks("T1")[0];
-        assert_eq!(t1.scale, None);
-        let t2 = &slha.get_raw_blocks("T2")[0];
-        assert_eq!(t2.scale, Some(17.3));
-        let t3 = &slha.get_raw_blocks("T3")[0];
-        assert_eq!(t3.scale, Some(9.));
-        let t4 = &slha.get_raw_blocks("T4")[0];
-        assert_eq!(t4.scale, Some(1e-3));
-        let t5 = &slha.get_raw_blocks("T5")[0];
-        assert_eq!(t5.scale, Some(-4.1));
-        let t6 = &slha.get_raw_blocks("T6")[0];
-        assert_eq!(t6.scale, Some(8.));
-        let t7 = &slha.get_raw_blocks("T7")[0];
-        assert_eq!(t7.scale, Some(-3.7e-9));
+        let Scale(s) = Scale::parse(&mut "Q = 8.022".split_whitespace()).unwrap();
+        assert_eq!(s, 8.022);
+        let Scale(s) = Scale::parse(&mut "q = 8.022".split_whitespace()).unwrap();
+        assert_eq!(s, 8.022);
+
+        let Scale(s) = Scale::parse(&mut "Q =1e-3".split_whitespace()).unwrap();
+        assert_eq!(s, 1e-3);
+        let Scale(s) = Scale::parse(&mut "q =1e-3".split_whitespace()).unwrap();
+        assert_eq!(s, 1e-3);
+
+        let Scale(s) = Scale::parse(&mut "Q= -1.9e-3".split_whitespace()).unwrap();
+        assert_eq!(s, -1.9e-3);
+        let Scale(s) = Scale::parse(&mut "q= -1.9e-3".split_whitespace()).unwrap();
+        assert_eq!(s, -1.9e-3);
+
+        assert!(Scale::parse(&mut "W= -1.9e-3".split_whitespace()).is_err());
+    }
+
+    #[test]
+    fn test_parse_opt_scales() {
+        let OptScale(s) = OptScale::parse_str("Q= 17.3").unwrap();
+        assert_eq!(s, Some(17.3));
+        let OptScale(s) = OptScale::parse_str("q= 17.3").unwrap();
+        assert_eq!(s, Some(17.3));
+
+        let OptScale(s) = OptScale::parse_str("Q = 8.022").unwrap();
+        assert_eq!(s, Some(8.022));
+        let OptScale(s) = OptScale::parse_str("q = 8.022").unwrap();
+        assert_eq!(s, Some(8.022));
+
+        let OptScale(s) = OptScale::parse_str("Q =1e-3").unwrap();
+        assert_eq!(s, Some(1e-3));
+        let OptScale(s) = OptScale::parse_str("q =1e-3").unwrap();
+        assert_eq!(s, Some(1e-3));
+
+        let OptScale(s) = OptScale::parse_str("Q= -1.9e-3").unwrap();
+        assert_eq!(s, Some(-1.9e-3));
+        let OptScale(s) = OptScale::parse_str("q= -1.9e-3").unwrap();
+        assert_eq!(s, Some(-1.9e-3));
+
+        let OptScale(s) = OptScale::parse_str("").unwrap();
+        assert_eq!(s, None);
+        let OptScale(s) = OptScale::parse_str("       ").unwrap();
+        assert_eq!(s, None);
+
+        assert!(OptScale::parse_str("W= -1.9e-3").is_err());
     }
 
     #[test]
@@ -3088,7 +3239,9 @@ Block MINPAR  # SUSY breaking input parameters
      2    250.0     # m12
      5   -100.0     # A0 ";
 
-        let err = Slha::parse(input).unwrap_err();
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Block<u8,f64>, Error> = slha.get_block("SM").unwrap();
+        let err = block.unwrap_err();
         if let Error(ErrorKind::InvalidBlock(name), _) = err {
             assert_eq!(&name, "sm");
         } else {
@@ -3585,7 +3738,9 @@ Block flup Q= 4.64649125e+03
     3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
          ";
 
-        let err = Slha::parse(input).unwrap_err();
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Vec<Block<(u8,u8),f64>>, Error> = slha.get_blocks("yd");
+        let err = block.unwrap_err();
         if let Error(ErrorKind::InvalidBlock(name), _) = err {
             assert_eq!(&name, "yd");
         } else {
@@ -3609,7 +3764,9 @@ Block flup Q= 4.64649125e+03
     3  3 9.97405356e-03   # Ytau(Q)MSSM DRbar
          ";
 
-        let err = Slha::parse(input).unwrap_err();
+        let slha = Slha::parse(input).unwrap();
+        let block: Result<Block<(u8,u8),f64>, Error> = slha.get_block("ye").unwrap();
+        let err = block.unwrap_err();
         if let Error(ErrorKind::InvalidBlock(name), _) = err {
             assert_eq!(&name, "ye");
         } else {
