@@ -1625,7 +1625,7 @@ impl<'a> Slha<'a> {
         while let Some(segment) = internal::parse_segment(&mut lines) {
             match segment? {
                 Segment::Block { name, block } => {
-                    let blocks = slha.blocks.entry(name).or_insert_with(|| Vec::new());
+                    let blocks = slha.blocks.entry(name).or_insert_with(Vec::new);
                     blocks.push(block)
                 }
                 Segment::Decay {
@@ -1871,7 +1871,7 @@ impl<'a> Slha<'a> {
     pub fn get_raw_blocks<'s>(&'s self, name: &str) -> &'s [RawBlock<'a>] {
         let name = name.to_lowercase();
         match self.blocks.get(&name) {
-            Some(blocks) => &blocks,
+            Some(blocks) => blocks,
             None => &[],
         }
     }
