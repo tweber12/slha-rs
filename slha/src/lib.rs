@@ -526,7 +526,7 @@
 //! [`get_raw_blocks`]: struct.Slha.html#method.get_decay
 //! [`get_decay`]: struct.Slha.html#method.get_decay
 
-#![recursion_limit="256"]
+#![recursion_limit = "256"]
 
 #[macro_use]
 extern crate error_chain;
@@ -538,7 +538,7 @@ use std::str;
 pub mod internal;
 pub mod modifier;
 
-use internal::{Segment, next_word, parse_block_body, parse_block_body_by};
+use internal::{parse_block_body, Segment};
 
 pub mod errors {
     //! Errors that may occur when parsing an SLHA file into rust types.
@@ -579,9 +579,9 @@ pub mod errors {
             ///
             /// This error is returned if e.g. a line from a block is parsed and there is
             /// unexpected input at the end of the line.
-            IncompleteParse(rest: String) {
-                description("The parser did not consume the whole line")
-                display("The parser did not consume the whole line, '{}' was left over", rest)
+            IncompleteParse(rest: Vec<String>) {
+                description("The parser did not consume all words of the input.")
+                display("The parser did not consume the whole line, '{:?}' was left over", rest)
             }
             /// There was not enough data to parse a line in the SLHA file into the desired rust
             /// type.
@@ -756,139 +756,117 @@ pub trait SlhaBlock: Sized {
     fn scale(&self) -> Option<f64>;
 }
 
-#[derive(Debug)]
-/// Return type of the parse function defined by the `Parseable` trait.
-pub enum ParseResult<'input, T> {
-    /// The value was parsed successfully.
-    ///
-    /// This variant contains the parsed value (in second position) and the remaining input (in
-    /// first position).
-    Done(&'input str, T),
-    /// The input could not be parsed into a value of the desired type.
-    ///
-    /// The field is an `Error` object detailing the problem.
-    Error(Error),
-}
-impl<'input, T> ParseResult<'input, T> {
-    /// Extract the parsed value from the last parser that should act on the input.
-    ///
-    /// Since this method is supposed to be used after all parsers are done, there should not be
-    /// any (non whitespace) input left.
-    /// If there is, an error is returned.
-    ///
-    /// # Errors
-    ///
-    /// * If the parser returned an error.
-    /// * If there is input remaining.
-    fn end(self) -> Result<T> {
-        match self {
-            ParseResult::Error(e) => Err(e),
-            ParseResult::Done(input, _) if !input.trim().is_empty() => Err(
-                ErrorKind::IncompleteParse(
-                    input.to_string(),
-                ).into(),
-            ),
-            ParseResult::Done(_, value) => Ok(value),
-        }
-    }
-    /// Turn a `ParseResult` into a normal result.
-    ///
-    /// This method can be used together with the '?' operator to chain parsers.
-    /// Unlike with the `end` method the remaining input is also returned.
-    ///
-    /// # Errors
-    ///
-    /// If the ParseResult was an `Error`.
-    fn to_result(self) -> Result<(&'input str, T)> {
-        match self {
-            ParseResult::Done(rest, value) => Ok((rest, value)),
-            ParseResult::Error(err) => Err(err),
-        }
-    }
-}
-
-/// A trait used by the various `Block`s to read the key and value from a line in
-/// an SLHA file.
-pub trait Parseable: Sized {
+pub trait ParseableWord: Sized {
     /// Parse a value from the input string.
     ///
     /// The difference to `std::str::parse` is that partially consuming the input is allowed.
     /// The remaining input is included in the returned `ParseResult` and therefore still available
     /// for chaining parsers.
-    fn parse<'input>(&'input str) -> ParseResult<'input, Self>;
+    fn parse_word<'input>(&'input str) -> Result<Self>;
 }
 
-impl Parseable for String {
-    fn parse<'input>(input: &'input str) -> ParseResult<'input, String> {
-        let input = input.trim();
-        if input.is_empty() {
-            return ParseResult::Error(ErrorKind::UnexpectedEol.into());
-        }
-        ParseResult::Done("", input.to_string())
+impl ParseableWord for String {
+    fn parse_word(input: &str) -> Result<String> {
+        Ok(input.to_string())
     }
 }
 
-macro_rules! impl_parseable {
+macro_rules! impl_parseable_word {
     ($int:ty, $err:ident) => {
-        impl Parseable for $int {
-            fn parse<'input>(input: &'input str) -> ParseResult<'input, $int> {
-                let (word, rest) = match next_word(input) {
-                    Some(a) => a,
-                    None => return ParseResult::Error(ErrorKind::UnexpectedEol.into()),
-                };
-                let value: $int = match word.parse() {
-                    Ok(value) => value,
-                    Err(err) => return ParseResult::Error(ErrorKind::$err(err).into()),
-                };
-                ParseResult::Done(rest, value)
+        impl ParseableWord for $int {
+            fn parse_word<'input>(input: &'input str) -> Result<$int> {
+                input.parse().map_err(|err| ErrorKind::$err(err).into())
             }
         }
     }
 }
-impl_parseable!(i8, InvalidInt);
-impl_parseable!(i16, InvalidInt);
-impl_parseable!(i32, InvalidInt);
-impl_parseable!(i64, InvalidInt);
-impl_parseable!(u8, InvalidInt);
-impl_parseable!(u16, InvalidInt);
-impl_parseable!(u32, InvalidInt);
-impl_parseable!(u64, InvalidInt);
-impl_parseable!(f32, InvalidFloat);
-impl_parseable!(f64, InvalidFloat);
+impl_parseable_word!(i8, InvalidInt);
+impl_parseable_word!(i16, InvalidInt);
+impl_parseable_word!(i32, InvalidInt);
+impl_parseable_word!(i64, InvalidInt);
+impl_parseable_word!(u8, InvalidInt);
+impl_parseable_word!(u16, InvalidInt);
+impl_parseable_word!(u32, InvalidInt);
+impl_parseable_word!(u64, InvalidInt);
+impl_parseable_word!(f32, InvalidFloat);
+impl_parseable_word!(f64, InvalidFloat);
+
+pub trait Parseable: Sized {
+    /// The lenght of the value to read, in words.
+    const LENGTH: Option<u8>;
+    /// Parse a value from the input string.
+    ///
+    /// The difference to `std::str::parse` is that partially consuming the input is allowed.
+    /// The remaining input is included in the returned `ParseResult` and therefore still available
+    /// for chaining parsers.
+    fn parse<'input, I>(&mut I) -> Result<Self>
+    where
+        I: Iterator<Item = &'input str>;
+}
+impl<T> Parseable for T
+where
+    T: ParseableWord,
+{
+    const LENGTH: Option<u8> = Some(1);
+    fn parse<'input, I>(input: &mut I) -> Result<Self>
+    where
+        I: Iterator<Item = &'input str>,
+    {
+        let word = match input.next() {
+            Some(word) => word,
+            None => bail!(ErrorKind::UnexpectedEol),
+        };
+        T::parse_word(word)
+    }
+}
+impl<T> Parseable for Vec<T>
+where
+    T: ParseableWord,
+{
+    const LENGTH: Option<u8> = None;
+    fn parse<'input, I>(input: &mut I) -> Result<Self>
+    where
+        I: Iterator<Item = &'input str>,
+    {
+        input.map(T::parse_word).collect()
+    }
+}
 
 macro_rules! impl_parseable_tuple {
-    ($($name:ident),+) => {
+    ($($name:ident),+; $n:expr) => {
         #[allow(non_snake_case)]
         #[allow(unused_assignments)]
         impl<$($name),*> Parseable for ($($name),*)
         where
-            $($name: Parseable),*
+            $($name: ParseableWord),*
         {
-            fn parse<'input>(input: &'input str) -> ParseResult<'input, ($($name),*)> {
-                let mut input = input;
+            const LENGTH: Option<u8> = Some($n);
+            fn parse<'input, I>(input: &mut I) -> Result<($($name),*)>
+            where
+                I: Iterator<Item = &'input str>,
+            {
                 $(
-                    let (rest, $name) = match $name::parse(input.trim_left()) {
-                        ParseResult::Done(rest, value) => (rest, value),
-                        ParseResult::Error(err) => return ParseResult::Error(err),
+                    let $name = match input.next() {
+                        Some(word) => $name::parse_word(word)?,
+                        None => bail!(ErrorKind::UnexpectedEol),
                     };
-                    input = rest;
                 )*
-                ParseResult::Done(rest, ($($name),*))
+                Ok(($($name),*))
             }
         }
     }
 }
-impl_parseable_tuple!(K1, K2);
-impl_parseable_tuple!(K1, K2, K3);
-impl_parseable_tuple!(K1, K2, K3, K4);
-impl_parseable_tuple!(K1, K2, K3, K4, K5);
-impl_parseable_tuple!(K1, K2, K3, K4, K5, K6);
-impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7);
-impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8);
-impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9);
-impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10);
-impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11);
-impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12);
+impl_parseable_tuple!(K1, K2; 2);
+impl_parseable_tuple!(K1, K2, K3; 3);
+impl_parseable_tuple!(K1, K2, K3, K4; 4);
+impl_parseable_tuple!(K1, K2, K3, K4, K5; 5);
+impl_parseable_tuple!(K1, K2, K3, K4, K5, K6; 6);
+impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7; 7);
+impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8; 8);
+impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9; 9);
+impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10; 10);
+impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11; 11);
+impl_parseable_tuple!(K1, K2, K3, K4, K5, K6, K7, K8, K9, K10, K11, K12; 12);
 
 /// A block from an SLHA file treated as a map.
 ///
@@ -1130,42 +1108,7 @@ where
 /// );
 /// # }
 /// ```
-#[derive(Clone, Debug, PartialEq)]
-pub struct BlockStr<Value> {
-    pub scale: Option<f64>,
-    pub map: HashMap<Vec<String>, Value>,
-}
-impl<Value> SlhaBlock for BlockStr<Value>
-where
-    Value: Parseable,
-{
-    fn parse<'input>(lines: &[Line<'input>], scale: Option<f64>) -> Result<Self> {
-        let map = parse_block_body_by(lines, parse_line_block_str)?;
-        Ok(BlockStr { scale, map })
-    }
-    fn scale(&self) -> Option<f64> {
-        self.scale
-    }
-}
-
-fn parse_line_block_str<'input, Value>(line: &'input str) -> Result<(Vec<String>, Value)>
-where
-    Value: Parseable,
-{
-    let mut val = Value::parse(line).end();
-    let mut keys = Vec::new();
-    let mut rest = line;
-    while let Err(_) = val {
-        if let Some((key, line)) = next_word(rest) {
-            keys.push(key.to_string());
-            val = Value::parse(line).end();
-            rest = line;
-        } else {
-            return Err(ErrorKind::InvalidBlockValue.into());
-        }
-    }
-    Ok((keys, val.expect("BUG: This should be impossible.")))
-}
+pub type BlockStr<Value> = Block<Vec<String>, Value>;
 
 /// A block type that only contains a single value.
 ///
@@ -1252,7 +1195,12 @@ where
         if lines.len() != 1 {
             bail!(ErrorKind::WrongNumberOfValues(lines.len()));
         }
-        let value = Value::parse(lines[0].data).end()?;
+        let mut words = lines[0].data.split_whitespace();
+        let value = Value::parse(&mut words)?;
+        let rest: Vec<_> = words.map(|x| x.to_string()).collect();
+        if !rest.is_empty() {
+            bail!(ErrorKind::IncompleteParse(rest));
+        }
         Ok(BlockSingle { value, scale })
     }
     fn scale(&self) -> Option<f64> {
@@ -1988,30 +1936,23 @@ fn find_duplicates<T: Clone + PartialOrd>(mut list: Vec<T>) -> Option<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Slha, Block, BlockSingle, BlockStr, Parseable, ParseResult, Decay, Line};
+    use super::{Block, BlockSingle, BlockStr, Decay, Line, Parseable, Slha};
     use super::errors::{Error, ErrorKind};
 
     #[test]
     fn test_parse_tuple() {
-        macro_rules! unwrap_parseresult {
-            ($result:expr) => {
-                match $result {
-                    ParseResult::Done(rest, value) => (rest, value),
-                    ParseResult::Error(err) => panic!(err),
-                }
-            }
-        }
         type T2 = (u8, u8);
-        assert_eq!(unwrap_parseresult!(T2::parse("1 2")), ("", (1, 2)));
-        assert_eq!(unwrap_parseresult!(T2::parse("    1 2")), ("", (1, 2)));
-        assert_eq!(unwrap_parseresult!(T2::parse("1 2   456")), (
-            "   456",
-            (1, 2),
-        ));
-        assert_eq!(unwrap_parseresult!(T2::parse(" 1    2      foobar")), (
-            "      foobar",
-            (1, 2),
-        ));
+        assert_eq!(T2::parse(&mut ["1", "2"].iter().cloned()).unwrap(), (1, 2));
+        type T3 = (u8, u8, f64);
+        assert_eq!(
+            T3::parse(&mut ["1", "2", "9.8"].iter().cloned()).unwrap(),
+            (1, 2, 9.8)
+        );
+        type T4 = (u8, u8, f64, String);
+        assert_eq!(
+            T4::parse(&mut ["1", "2", "9.8", "foo"].iter().cloned()).unwrap(),
+            (1, 2, 9.8, "foo".to_string())
+        );
     }
 
     #[test]
@@ -2504,21 +2445,64 @@ Block MINPAR  # SUSY breaking input parameters
      5   -100.0     $ A0 ";
         let slha = Slha::parse(input).unwrap();
         println!("{:?}", slha);
-        let sminputs: Block<i8, String> = slha.get_block("sminputs").unwrap().unwrap();
+        let sminputs: Block<i8, Vec<String>> = slha.get_block("sminputs").unwrap().unwrap();
         assert_eq!(sminputs.map.len(), 3);
-        assert_eq!(sminputs.map[&3], "0.1172  $ alpha_s(MZ) SM MSbar");
-        assert_eq!(sminputs.map[&5], "4.25    $ Mb(mb) SM MSbar");
-        assert_eq!(sminputs.map[&6], "174.3     $ Mtop(pole)");
-        let modsel: Block<i8, String> = slha.get_block("modsel").unwrap().unwrap();
+        assert_eq!(
+            sminputs.map[&3],
+            vec![
+                "0.1172".to_string(),
+                "$".to_string(),
+                "alpha_s(MZ)".to_string(),
+                "SM".to_string(),
+                "MSbar".to_string(),
+            ]
+        );
+        assert_eq!(
+            sminputs.map[&5],
+            vec![
+                "4.25".to_string(),
+                "$".to_string(),
+                "Mb(mb)".to_string(),
+                "SM".to_string(),
+                "MSbar".to_string(),
+            ]
+        );
+        assert_eq!(
+            sminputs.map[&6],
+            vec![
+                "174.3".to_string(),
+                "$".to_string(),
+                "Mtop(pole)".to_string(),
+            ]
+        );
+        let modsel: Block<i8, Vec<String>> = slha.get_block("modsel").unwrap().unwrap();
         assert_eq!(modsel.map.len(), 1);
-        assert_eq!(modsel.map[&1], "1   $ sugra");
-        let minpar: Block<i8, String> = slha.get_block("minpar").unwrap().unwrap();
+        assert_eq!(
+            modsel.map[&1],
+            vec!["1".to_string(), "$".to_string(), "sugra".to_string()]
+        );
+        let minpar: Block<i8, Vec<String>> = slha.get_block("minpar").unwrap().unwrap();
         assert_eq!(minpar.map.len(), 5);
-        assert_eq!(minpar.map[&3], "10.0     $ tanb");
-        assert_eq!(minpar.map[&4], "1.0     $ sign(mu)");
-        assert_eq!(minpar.map[&1], "100.0     $ m0");
-        assert_eq!(minpar.map[&2], "250.0     $ m12");
-        assert_eq!(minpar.map[&5], "-100.0     $ A0");
+        assert_eq!(
+            minpar.map[&3],
+            vec!["10.0".to_string(), "$".to_string(), "tanb".to_string()]
+        );
+        assert_eq!(
+            minpar.map[&4],
+            vec!["1.0".to_string(), "$".to_string(), "sign(mu)".to_string()]
+        );
+        assert_eq!(
+            minpar.map[&1],
+            vec!["100.0".to_string(), "$".to_string(), "m0".to_string()]
+        );
+        assert_eq!(
+            minpar.map[&2],
+            vec!["250.0".to_string(), "$".to_string(), "m12".to_string()]
+        );
+        assert_eq!(
+            minpar.map[&5],
+            vec!["-100.0".to_string(), "$".to_string(), "A0".to_string()]
+        );
     }
 
     #[test]
@@ -4054,8 +4038,8 @@ BloCk FooBar
         let block: BlockStr<(i64, f64)> = slha.get_block("mass").unwrap().unwrap();
         assert_eq!(block.map.len(), 1);
         assert_eq!(block.map[&Vec::new()], (6, 173.2));
-        let block: Result<BlockStr<(i8, i8, i8, i8, f64)>, Error> = slha.get_block("foobar")
-            .unwrap();
+        let block: Result<BlockStr<(i8, i8, i8, i8, f64)>, Error> =
+            slha.get_block("foobar").unwrap();
         let err = block.unwrap_err();
         if let Error(ErrorKind::InvalidBlock(name), _) = err {
             assert_eq!(name, "foobar");

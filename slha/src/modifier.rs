@@ -29,7 +29,7 @@
 //! `internal::WrappedBlock` trait.
 //! Any type implementing this trait can be used as a field type by the `derive` macro.
 
-use {SlhaBlock, RawBlock};
+use {RawBlock, SlhaBlock};
 use internal::WrappedBlock;
 use errors::*;
 
